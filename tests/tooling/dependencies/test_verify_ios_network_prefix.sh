@@ -207,7 +207,7 @@ expect_cmake_diagnostic "include/slirp/libslirp.h" verify "$CASE" ios
 # The installed platform receipt is the checked-in one, byte for byte.
 CASE="$TEST_ROOT/edited-receipt"
 copy_fixture "$CASE"
-sed 's/^format\t2$/format\t3/' \
+awk -F '\t' -v OFS='\t' '$1 == "format" && $2 == "2" { $2 = "3" } { print }' \
 	"$DEVICE/share/uml-dependencies/ios-device-network-arm64.tsv" \
 	>"$CASE/share/uml-dependencies/ios-device-network-arm64.tsv"
 cmp -s "$DEVICE/share/uml-dependencies/ios-device-network-arm64.tsv" \

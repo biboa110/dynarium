@@ -12,6 +12,8 @@ on:
       - 'darwin/**'
       - 'Kernarium/Runtime/**'
       - 'kernel/**'
+      - 'tests/tooling/cmake/**'
+      - 'tests/tooling/dependencies/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
       - '.gitattributes'
@@ -78,7 +80,19 @@ jobs:
           path: .build/dependency-cache
           key: dep-cache-core-v1-${{ hashFiles('dependencies/manifest.tsv') }}
 
+      - name: Cache verified core iOS prefixes
+        id: core-prefix-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/dependencies/ios-zstd
+            .build/dependencies/ios-storage
+            .build/dependencies/ios-device-arm64
+            .build/dependencies/ios-simulator-arm64
+          key: core-prefixes-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/platforms/ios-*compression*.tsv', 'dependencies/platforms/ios-*storage*.tsv', 'dependencies/platforms/ios-*network*.tsv', 'dependencies/build-ios-*.sh', 'dependencies/ios-static-xcframework.sh', 'dependencies/cmake/VerifyIos*.cmake', 'dependencies/patches/gptfdisk/**', 'dependencies/patches/glib-ios/**', 'dependencies/patches/libslirp/**') }}
+
       - name: Prepare core iOS dependency sources
+        if: steps.core-prefix-cache.outputs.cache-hit != 'true'
         run: |
           ./dependencies/prepare.sh --product ios-compression
           ./dependencies/prepare.sh --product ios-storage
@@ -91,16 +105,51 @@ jobs:
           ./dependencies/build-ios-network.sh --platform ios --jobs 4
           ./dependencies/build-ios-network.sh --platform ios-simulator --jobs 4
 
-      - name: Run dependency verifier tooling tests
+      - name: Test check-no-fexcore.py
         run: |
-          ./tests/tooling/cmake/test_check_no_fexcore.py \
-            --checker "$PWD/scripts/check-no-fexcore.py" || \
-            python3 -B tests/tooling/cmake/test_check_no_fexcore.py \
-              --checker "$PWD/scripts/check-no-fexcore.py"
-          python3 -B tests/tooling/cmake/test_check_privacy_manifests.py \
-            --checker "$PWD/scripts/check-privacy-manifests.py"
-          ./tests/tooling/dependencies/test_verify_ios_static_xcframework.sh
-          ./tests/tooling/dependencies/test_verify_ios_network_prefix.sh
+          log=$(mktemp)
+          if python3 -B tests/tooling/cmake/test_check_no_fexcore.py \
+            --checker "$PWD/scripts/check-no-fexcore.py" >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=test_check_no_fexcore::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test check-privacy-manifests.py
+        run: |
+          log=$(mktemp)
+          if python3 -B tests/tooling/cmake/test_check_privacy_manifests.py \
+            --checker "$PWD/scripts/check-privacy-manifests.py" >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=test_check_privacy_manifests::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test VerifyIosStaticXCFramework
+        run: |
+          log=$(mktemp)
+          if ./tests/tooling/dependencies/test_verify_ios_static_xcframework.sh >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=test_verify_ios_static_xcframework::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test VerifyIosNetworkPrefix
+        run: |
+          log=$(mktemp)
+          if ./tests/tooling/dependencies/test_verify_ios_network_prefix.sh >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=test_verify_ios_network_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
 
       - name: Pack core dependency prefixes
         run: |
@@ -118,10 +167,12 @@ jobs:
 
   ios-gpu-software:
     name: iOS 16 Mesa Software GPU (${{ matrix.platform }})
+    needs: [ios-core-deps]
     runs-on: macos-15
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         platform: [ios, ios-simulator]
     steps:
@@ -155,18 +206,43 @@ jobs:
 
       - name: Build Apple GPU software prefix (${{ matrix.platform }})
         run: |
-          UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
+          log=$(mktemp)
+          if UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
             ./dependencies/build-apple-gpu.sh \
               --platform "${{ matrix.platform }}" \
               --renderer software \
-              --jobs 4
+              --jobs 4 >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=build-apple-gpu-%s::%s\n' "${{ matrix.platform }}" "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
 
-      - name: Run software GPU verifier tests
+      - name: Test check-software-renderer.py
         if: matrix.platform == 'ios-simulator'
         run: |
-          python3 -B tests/tooling/cmake/test_check_software_renderer.py \
-            --checker "$PWD/scripts/check-software-renderer.py"
-          ./tests/tooling/dependencies/test_verify_apple_gpu_software_prefix.sh
+          log=$(mktemp)
+          if python3 -B tests/tooling/cmake/test_check_software_renderer.py \
+            --checker "$PWD/scripts/check-software-renderer.py" >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=test_check_software_renderer::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test VerifyAppleGpuPrefix (software)
+        if: matrix.platform == 'ios-simulator'
+        run: |
+          log=$(mktemp)
+          if ./tests/tooling/dependencies/test_verify_apple_gpu_software_prefix.sh >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=test_verify_apple_gpu_software_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
 
       - name: Pack Apple GPU software prefix (${{ matrix.platform }})
         run: |
@@ -243,8 +319,14 @@ jobs:
 
       - name: Configure and build KernariumRuntime (Android 17, iOS 16.0) + architecture-audit
         run: |
-          cmake --preset kernarium-ios-device-android
-          cmake --build --preset kernarium-ios-device-android
+          log=$(mktemp)
+          if (cmake --preset kernarium-ios-device-android && cmake --build --preset kernarium-ios-device-android) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error title=kernarium-runtime-build::%s\n' "$(tail -n 30 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
 
       - name: Verify iOS 16.0 Mach-O minos and software renderer symbols
         run: |

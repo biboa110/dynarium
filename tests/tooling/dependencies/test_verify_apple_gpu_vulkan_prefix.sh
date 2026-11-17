@@ -259,7 +259,7 @@ expect_failure "installed patch files" verify "$CASE_PREFIX"
 # The installed platform contract must be the checked-in one.
 CASE_PREFIX="$TEST_ROOT/edited-contract"
 copy_fixture "$CASE_PREFIX"
-sed 's/^helper_process\t.*/helper_process\tenabled/' \
+awk -F '\t' -v OFS='\t' '$1 == "helper_process" { $2 = "enabled" } { print }' \
 	"$BASE_PREFIX/share/uml-dependencies/macos-gpu-vulkan-arm64.tsv" \
 	>"$CASE_PREFIX/share/uml-dependencies/macos-gpu-vulkan-arm64.tsv"
 expect_failure "edited platform contract" verify "$CASE_PREFIX"
