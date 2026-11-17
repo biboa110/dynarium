@@ -70,6 +70,52 @@ jobs:
             --cmake "$(command -v cmake)" \
             --audit "$PWD/scripts/audit-cmake-file-api.cmake"
 
+      - name: Test check-no-fexcore.py
+        run: |
+          log=$(mktemp)
+          if python3 -B tests/tooling/cmake/test_check_no_fexcore.py \
+            --checker "$PWD/scripts/check-no-fexcore.py" >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_check_no_fexcore::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test check-privacy-manifests.py
+        run: |
+          log=$(mktemp)
+          if python3 -B tests/tooling/cmake/test_check_privacy_manifests.py \
+            --checker "$PWD/scripts/check-privacy-manifests.py" >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_check_privacy_manifests::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test VerifyIosStaticXCFramework
+        run: |
+          log=$(mktemp)
+          if ./tests/tooling/dependencies/test_verify_ios_static_xcframework.sh >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_verify_ios_static_xcframework::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Test VerifyIosNetworkPrefix
+        run: |
+          log=$(mktemp)
+          if ./tests/tooling/dependencies/test_verify_ios_network_prefix.sh >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_verify_ios_network_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
       - name: Install build tools
         run: |
           brew install cmake ninja meson pkg-config autoconf automake libtool gettext
@@ -104,52 +150,6 @@ jobs:
           ./dependencies/build-ios-storage.sh --jobs 4
           ./dependencies/build-ios-network.sh --platform ios --jobs 4
           ./dependencies/build-ios-network.sh --platform ios-simulator --jobs 4
-
-      - name: Test check-no-fexcore.py
-        run: |
-          log=$(mktemp)
-          if python3 -B tests/tooling/cmake/test_check_no_fexcore.py \
-            --checker "$PWD/scripts/check-no-fexcore.py" >"$log" 2>&1; then
-            cat "$log"; rm -f "$log"
-          else
-            rc=$?; cat "$log"
-            printf '::error title=test_check_no_fexcore::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
-            rm -f "$log"; exit "$rc"
-          fi
-
-      - name: Test check-privacy-manifests.py
-        run: |
-          log=$(mktemp)
-          if python3 -B tests/tooling/cmake/test_check_privacy_manifests.py \
-            --checker "$PWD/scripts/check-privacy-manifests.py" >"$log" 2>&1; then
-            cat "$log"; rm -f "$log"
-          else
-            rc=$?; cat "$log"
-            printf '::error title=test_check_privacy_manifests::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
-            rm -f "$log"; exit "$rc"
-          fi
-
-      - name: Test VerifyIosStaticXCFramework
-        run: |
-          log=$(mktemp)
-          if ./tests/tooling/dependencies/test_verify_ios_static_xcframework.sh >"$log" 2>&1; then
-            cat "$log"; rm -f "$log"
-          else
-            rc=$?; cat "$log"
-            printf '::error title=test_verify_ios_static_xcframework::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
-            rm -f "$log"; exit "$rc"
-          fi
-
-      - name: Test VerifyIosNetworkPrefix
-        run: |
-          log=$(mktemp)
-          if ./tests/tooling/dependencies/test_verify_ios_network_prefix.sh >"$log" 2>&1; then
-            cat "$log"; rm -f "$log"
-          else
-            rc=$?; cat "$log"
-            printf '::error title=test_verify_ios_network_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
-            rm -f "$log"; exit "$rc"
-          fi
 
       - name: Pack core dependency prefixes
         run: |
@@ -215,7 +215,7 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
-            printf '::error title=build-apple-gpu-%s::%s\n' "${{ matrix.platform }}" "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-apple-gpu-%s::%s\n' "${{ matrix.platform }}" "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -228,7 +228,7 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
-            printf '::error title=test_check_software_renderer::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_check_software_renderer::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -240,7 +240,7 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
-            printf '::error title=test_verify_apple_gpu_software_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_verify_apple_gpu_software_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -324,7 +324,7 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
-            printf '::error title=kernarium-runtime-build::%s\n' "$(tail -n 30 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=kernarium-runtime-build::%s\n' "$(tail -n 30 "$log" | tr '\r\n' '  ' | cut -c1-900)"
             rm -f "$log"; exit "$rc"
           fi
 

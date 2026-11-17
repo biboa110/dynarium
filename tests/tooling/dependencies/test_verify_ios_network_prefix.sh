@@ -142,12 +142,27 @@ xcrun vtool -remove-build-version ios -output "$MEMBERS/no-build-version.o" \
 	"$MEMBERS/ios.o"
 xcrun ld -r -arch arm64 -headerpad 0x100 "$MEMBERS/ios.o" \
 	-o "$MEMBERS/two-build-versions.o"
-# Copy the build-version command into the header padding ld left.
+# Copy the build-version command into header padding (shifting offsets if none).
 python3 - "$MEMBERS/two-build-versions.o" <<'EOF'
 import struct
 import sys
 
+LC_SYMTAB = 0x02
+LC_DYSYMTAB = 0x0B
+LC_SEGMENT_64 = 0x19
 LC_BUILD_VERSION = 0x32
+LINKEDIT_DATA_CMDS = {0x1D, 0x1E, 0x26, 0x29, 0x2B, 0x2E, 0x33, 0x34}
+
+def shift_u32(buf, pos, end, delta):
+    val = struct.unpack_from("<I", buf, pos)[0]
+    if val >= end:
+        struct.pack_into("<I", buf, pos, val + delta)
+
+def shift_u64(buf, pos, end, delta):
+    val = struct.unpack_from("<Q", buf, pos)[0]
+    if val >= end:
+        struct.pack_into("<Q", buf, pos, val + delta)
+
 path = sys.argv[1]
 with open(path, "rb") as stream:
     data = bytearray(stream.read())
@@ -155,16 +170,41 @@ if struct.unpack_from("<I", data, 0)[0] != 0xFEEDFACF:
     sys.exit(f"{path} is not a 64-bit Mach-O object")
 count, size = struct.unpack_from("<2I", data, 16)
 offset = 32
+build_version = None
 for _ in range(count):
     command, command_size = struct.unpack_from("<2I", data, offset)
     if command == LC_BUILD_VERSION:
-        build_version = data[offset:offset + command_size]
+        build_version = bytes(data[offset:offset + command_size])
     offset += command_size
+if build_version is None:
+    sys.exit(f"{path} lacks LC_BUILD_VERSION")
 end = 32 + size
-if any(data[end:end + len(build_version)]):
-    sys.exit(f"{path} has no header padding for another command")
-data[end:end + len(build_version)] = build_version
-struct.pack_into("<2I", data, 16, count + 1, size + len(build_version))
+pad = len(build_version)
+if end + pad <= len(data) and not any(data[end:end + pad]):
+    data[end:end + pad] = build_version
+else:
+    pos = 32
+    for _ in range(count):
+        command, command_size = struct.unpack_from("<2I", data, pos)
+        if command == LC_SEGMENT_64 and command_size >= 72:
+            shift_u64(data, pos + 40, end, pad)
+            nsects = struct.unpack_from("<I", data, pos + 64)[0]
+            for sect_index in range(nsects):
+                sec = pos + 72 + sect_index * 80
+                if sec + 80 <= pos + command_size:
+                    shift_u32(data, sec + 48, end, pad)
+                    shift_u32(data, sec + 56, end, pad)
+        elif command == LC_SYMTAB and command_size >= 24:
+            shift_u32(data, pos + 8, end, pad)
+            shift_u32(data, pos + 16, end, pad)
+        elif command == LC_DYSYMTAB and command_size >= 80:
+            for field in (32, 40, 48, 56, 64, 72):
+                shift_u32(data, pos + field, end, pad)
+        elif command in LINKEDIT_DATA_CMDS and command_size >= 16:
+            shift_u32(data, pos + 8, end, pad)
+        pos += command_size
+    data[end:end] = build_version
+struct.pack_into("<2I", data, 16, count + 1, size + pad)
 with open(path, "wb") as stream:
     stream.write(data)
 EOF

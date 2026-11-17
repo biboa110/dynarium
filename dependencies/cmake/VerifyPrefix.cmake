@@ -142,9 +142,11 @@ function(uml_verify_apple_binary)
     execute_process(
         COMMAND "${_arg_OTOOL}" -l "${_arg_PATH}"
         RESULT_VARIABLE _status
-        OUTPUT_VARIABLE _load_commands)
+        OUTPUT_VARIABLE _load_commands
+        ERROR_VARIABLE _otool_error)
     if(NOT _status EQUAL 0)
-        message(FATAL_ERROR "Could not inspect Apple binary: ${_arg_PATH}")
+        message(FATAL_ERROR
+            "Could not inspect Apple binary: ${_arg_PATH}: ${_otool_error}")
     endif()
     if(_load_commands MATCHES "LC_VERSION_MIN_[A-Z]+")
         message(FATAL_ERROR
