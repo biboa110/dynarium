@@ -1,0 +1,289 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Build iOS 16 Dependencies
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'dependencies/**'
+      - 'cmake/**'
+      - 'scripts/**'
+      - 'darwin/**'
+      - 'Kernarium/Runtime/**'
+      - 'kernel/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.gitattributes'
+      - '.github/workflows/build-deps.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-deps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-core-deps:
+    name: iOS 16 Core Dependencies (zstd, gptfdisk, network)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check environment
+        run: |
+          uname -a
+          xcodebuild -version
+          [ "$(uname -m)" = "arm64" ]
+
+      - name: Verify LF line endings, audits, and CMake floor tests
+        run: |
+          python3 - <<'EOF'
+          import pathlib, subprocess, sys
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          exts = {".sh", ".py", ".tsv", ".cmake", ".yml", ".yaml", ".json", ".swift"}
+          names = {"CMakeLists.txt", "CMakePresets.json", ".gitattributes", ".gitignore"}
+          bad = []
+          for rel in tracked:
+              p = pathlib.Path(rel)
+              if rel.startswith("dependencies/patches/"):
+                  continue
+              if p.suffix in exts or p.name in names:
+                  data = p.read_bytes()
+                  if b"\r" in data or data.startswith(b"\xef\xbb\xbf"):
+                      bad.append(rel)
+          if bad:
+              sys.exit(f"CRLF or BOM found in: {bad}")
+          print("Line ending and BOM check passed.")
+          EOF
+          cmake -DSOURCE_ROOT="$PWD" -P scripts/audit-source-tree.cmake
+          python3 tests/tooling/cmake/check_license_headers.py --source-root "$PWD"
+          python3 tests/tooling/cmake/test_apple_deployment_floor.py \
+            --cmake "$(command -v cmake)" \
+            --toolchain "$PWD/cmake/toolchains/Apple.cmake"
+          python3 tests/tooling/cmake/test_engine_kind_link_audit.py \
+            --cmake "$(command -v cmake)" \
+            --audit "$PWD/scripts/audit-cmake-file-api.cmake"
+
+      - name: Install build tools
+        run: |
+          brew install cmake ninja meson pkg-config autoconf automake libtool gettext
+
+      - name: Cache dependency Git fetches
+        uses: actions/cache@v4
+        with:
+          path: .build/dependency-cache
+          key: dep-cache-core-v1-${{ hashFiles('dependencies/manifest.tsv') }}
+
+      - name: Prepare core iOS dependency sources
+        run: |
+          ./dependencies/prepare.sh --product ios-compression
+          ./dependencies/prepare.sh --product ios-storage
+          ./dependencies/prepare.sh --product ios-network
+
+      - name: Build iOS compression, storage, and network prefixes (device + simulator)
+        run: |
+          ./dependencies/build-ios-zstd.sh --jobs 4
+          ./dependencies/build-ios-storage.sh --jobs 4
+          ./dependencies/build-ios-network.sh --platform ios --jobs 4
+          ./dependencies/build-ios-network.sh --platform ios-simulator --jobs 4
+
+      - name: Run dependency verifier tooling tests
+        run: |
+          ./tests/tooling/cmake/test_check_no_fexcore.py \
+            --checker "$PWD/scripts/check-no-fexcore.py" || \
+            python3 -B tests/tooling/cmake/test_check_no_fexcore.py \
+              --checker "$PWD/scripts/check-no-fexcore.py"
+          python3 -B tests/tooling/cmake/test_check_privacy_manifests.py \
+            --checker "$PWD/scripts/check-privacy-manifests.py"
+          ./tests/tooling/dependencies/test_verify_ios_static_xcframework.sh
+          ./tests/tooling/dependencies/test_verify_ios_network_prefix.sh
+
+      - name: Pack core dependency prefixes
+        run: |
+          mkdir -p .build/artifacts
+          tar -czf .build/artifacts/ios-core-deps-prefixes.tar.gz \
+            -C .build/dependencies \
+            ios-zstd ios-storage ios-device-arm64 ios-simulator-arm64
+
+      - name: Upload core dependency prefixes
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-core-deps-prefixes
+          path: .build/artifacts/ios-core-deps-prefixes.tar.gz
+          retention-days: 7
+
+  ios-gpu-software:
+    name: iOS 16 Mesa Software GPU (${{ matrix.platform }})
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, ios-simulator]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools and Mesa Python environment
+        run: |
+          brew install cmake ninja pkg-config
+          python3 -m venv .build/gpu-tools-venv
+          .build/gpu-tools-venv/bin/pip install --upgrade pip meson mako pyyaml packaging
+
+      - name: Cache dependency Git fetches and LLVM archive
+        uses: actions/cache@v4
+        with:
+          path: .build/dependency-cache
+          key: dep-cache-gpu-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv') }}
+
+      - name: Cache verified Apple GPU software prefix (${{ matrix.platform }})
+        id: gpu-prefix-cache
+        uses: actions/cache@v4
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment
+          key: gpu-sw-v1-${{ matrix.platform }}-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv', 'dependencies/platforms/*gpu-software*.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
+
+      - name: Prepare GPU sources and LLVM archive
+        if: steps.gpu-prefix-cache.outputs.cache-hit != 'true'
+        run: |
+          ./dependencies/prepare.sh --product apple-gpu-vulkan-experiment
+          ./dependencies/prepare.sh --archive-manifest dependencies/llvm/archives.tsv
+
+      - name: Build Apple GPU software prefix (${{ matrix.platform }})
+        run: |
+          UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
+            ./dependencies/build-apple-gpu.sh \
+              --platform "${{ matrix.platform }}" \
+              --renderer software \
+              --jobs 4
+
+      - name: Run software GPU verifier tests
+        if: matrix.platform == 'ios-simulator'
+        run: |
+          python3 -B tests/tooling/cmake/test_check_software_renderer.py \
+            --checker "$PWD/scripts/check-software-renderer.py"
+          ./tests/tooling/dependencies/test_verify_apple_gpu_software_prefix.sh
+
+      - name: Pack Apple GPU software prefix (${{ matrix.platform }})
+        run: |
+          mkdir -p .build/artifacts
+          case "${{ matrix.platform }}" in
+            ios) prefix_dir=ios-device-arm64 ;;
+            ios-simulator) prefix_dir=ios-simulator-arm64 ;;
+          esac
+          tar -czf ".build/artifacts/ios-gpu-software-${{ matrix.platform }}.tar.gz" \
+            -C .build/dependencies/apple-gpu-vulkan-experiment \
+            "$prefix_dir"
+
+      - name: Upload Apple GPU software prefix (${{ matrix.platform }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-gpu-software-${{ matrix.platform }}
+          path: .build/artifacts/ios-gpu-software-${{ matrix.platform }}.tar.gz
+          retention-days: 7
+
+  package-and-smoke-ios16:
+    name: Verify Prefixes & Smoke-Build Android 6.18 Runtime (iOS 16.0)
+    needs: [ios-core-deps, ios-gpu-software]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          brew install cmake ninja
+
+      - name: Download built dependency artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .build/downloaded-artifacts
+
+      - name: Assemble .build/dependencies and verify all 6 prefixes
+        run: |
+          mkdir -p .build/dependencies/apple-gpu-vulkan-experiment
+          tar -xzf .build/downloaded-artifacts/ios-core-deps-prefixes/ios-core-deps-prefixes.tar.gz \
+            -C .build/dependencies
+          tar -xzf .build/downloaded-artifacts/ios-gpu-software-ios/ios-gpu-software-ios.tar.gz \
+            -C .build/dependencies/apple-gpu-vulkan-experiment
+          tar -xzf .build/downloaded-artifacts/ios-gpu-software-ios-simulator/ios-gpu-software-ios-simulator.tar.gz \
+            -C .build/dependencies/apple-gpu-vulkan-experiment
+          ./dependencies/build-ios-zstd.sh --verify-only
+          ./dependencies/build-ios-storage.sh --verify-only
+          ./dependencies/build-ios-network.sh --platform ios --verify-only
+          ./dependencies/build-ios-network.sh --platform ios-simulator --verify-only
+          ./dependencies/build-apple-gpu.sh --platform ios --verify-only
+          ./dependencies/build-apple-gpu.sh --platform ios-simulator --verify-only
+
+      - name: Download accepted Android 6.18 4K kernel artifact
+        run: |
+          mkdir -p .build/kernel/artifacts .build/kernel/tmp
+          curl -fL --retry 3 \
+            -o .build/kernel/tmp/android-kernel.tar.gz \
+            https://github.com/imxieyi/Kernarium/releases/download/1.0b9-beta/android-6.18-arm64-4k-20261111-6.18.60-mc2.tar.gz
+          tar -xzf .build/kernel/tmp/android-kernel.tar.gz -C .build/kernel/tmp
+          bundle_dir=".build/kernel/artifacts/android-6.18-arm64-4k-20261111-6.18.60-mc2"
+          if [ -d ".build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2/kernel" ]; then
+            mv .build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2 "$bundle_dir"
+          elif [ -d ".build/kernel/tmp/kernel" ]; then
+            mkdir -p "$bundle_dir"
+            mv .build/kernel/tmp/* "$bundle_dir/" || true
+          else
+            ls -la .build/kernel/tmp
+            echo "Unexpected Android kernel archive layout" >&2
+            exit 1
+          fi
+          rm -rf .build/kernel/tmp
+          test -f "$bundle_dir/kernel/vmlinux"
+
+      - name: Configure and build KernariumRuntime (Android 17, iOS 16.0) + architecture-audit
+        run: |
+          cmake --preset kernarium-ios-device-android
+          cmake --build --preset kernarium-ios-device-android
+
+      - name: Verify iOS 16.0 Mach-O minos and software renderer symbols
+        run: |
+          framework_dir=".build/kernarium-runtime-ios-device-android-4k/Kernarium/Runtime/KRuntime_Android_6_18_4K.framework"
+          runtime_bin="$framework_dir/KRuntime_Android_6_18_4K"
+          test -f "$runtime_bin"
+          xcrun otool -l "$runtime_bin" | awk '
+            /cmd LC_BUILD_VERSION/ { in_bv=1; next }
+            in_bv && /minos / { print; if ($2 != "16.0") exit 1; found=1; in_bv=0 }
+            END { if (!found) exit 1 }
+          '
+          plist_minos=$(plutil -extract MinimumOSVersion raw -o - "$framework_dir/Info.plist")
+          echo "Runtime Info.plist MinimumOSVersion: $plist_minos"
+          [ "$plist_minos" = "16.0" ]
+          python3 -B scripts/check-software-renderer.py --present \
+            .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64/Frameworks \
+            "$framework_dir"
+
+      - name: Package dynarium-deps-ios16-arm64.tar.gz
+        run: |
+          tar -czf dynarium-deps-ios16-arm64.tar.gz -C .build dependencies
+
+      - name: Upload dynarium-deps-ios16-arm64 workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynarium-deps-ios16-arm64
+          path: dynarium-deps-ios16-arm64.tar.gz
+          retention-days: 30
+
+      - name: Publish prebuilt dependencies release (deps-ios16-latest)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view deps-ios16-latest >/dev/null 2>&1; then
+            gh release upload deps-ios16-latest dynarium-deps-ios16-arm64.tar.gz --clobber
+          else
+            gh release create deps-ios16-latest dynarium-deps-ios16-arm64.tar.gz \
+              --prerelease \
+              --title "Dynarium iOS 16.0 Dependencies (Latest)" \
+              --notes "Prebuilt iOS 16.0 ARM64 dependency prefixes (zstd, gptfdisk, GLib/libslirp network, and Mesa llvmpipe/softpipe GPU stack for iOS device & Simulator) verified against KernariumRuntime Android 6.18 4K."
+          fi
