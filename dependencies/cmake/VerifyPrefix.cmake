@@ -131,10 +131,11 @@ function(uml_verify_apple_binary)
         COMMAND "${_arg_LIPO}" -archs "${_arg_PATH}"
         RESULT_VARIABLE _status
         OUTPUT_VARIABLE _architectures
+        ERROR_VARIABLE _lipo_error
         OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(NOT _status EQUAL 0 OR NOT _architectures STREQUAL "arm64")
         message(FATAL_ERROR
-            "${_arg_PATH} is not an arm64-only Apple binary: ${_architectures}")
+            "${_arg_PATH} is not an arm64-only Apple binary: ${_architectures} ${_lipo_error}")
     endif()
     if(NOT DEFINED _arg_PLATFORM)
         return()
@@ -144,7 +145,7 @@ function(uml_verify_apple_binary)
         RESULT_VARIABLE _status
         OUTPUT_VARIABLE _load_commands
         ERROR_VARIABLE _otool_error)
-    if(NOT _status EQUAL 0)
+    if(NOT _status EQUAL 0 OR NOT "${_otool_error}" STREQUAL "")
         message(FATAL_ERROR
             "Could not inspect Apple binary: ${_arg_PATH}: ${_otool_error}")
     endif()

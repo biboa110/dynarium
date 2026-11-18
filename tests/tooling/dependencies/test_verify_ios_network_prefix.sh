@@ -140,8 +140,7 @@ xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 \
 	-c "$TEST_ROOT/fixture.c" -o "$MEMBERS/ios.o"
 xcrun vtool -remove-build-version ios -output "$MEMBERS/no-build-version.o" \
 	"$MEMBERS/ios.o"
-xcrun ld -r -arch arm64 -headerpad 0x100 "$MEMBERS/ios.o" \
-	-o "$MEMBERS/two-build-versions.o"
+cp "$MEMBERS/ios.o" "$MEMBERS/two-build-versions.o"
 # Copy the build-version command into header padding (shifting offsets if none).
 python3 - "$MEMBERS/two-build-versions.o" <<'EOF'
 import struct
