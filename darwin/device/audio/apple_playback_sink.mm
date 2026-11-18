@@ -33,6 +33,46 @@
 namespace uml::audio {
 namespace {
 
+[[nodiscard]] bool connectNodes(
+    AVAudioEngine* engine,
+    AVAudioNode* source,
+    AVAudioNode* destination,
+    AVAudioFormat* format,
+    NSError** error)
+{
+#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000) || \
+    (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000)
+    if (@available(macOS 27.0, iOS 27.0, *)) {
+        return [engine connect:source
+                            to:destination
+                        format:format
+                         error:error] ? true : false;
+    }
+#endif
+    (void)error;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [engine connect:source to:destination format:format];
+#pragma clang diagnostic pop
+    return true;
+}
+
+[[nodiscard]] bool playNode(AVAudioPlayerNode* player, NSError** error)
+{
+#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000) || \
+    (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000)
+    if (@available(macOS 27.0, iOS 27.0, *)) {
+        return [player playAndReturnError:error] ? true : false;
+    }
+#endif
+    (void)error;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [player play];
+#pragma clang diagnostic pop
+    return player.isPlaying ? true : false;
+}
+
 struct NotificationFlags final {
     explicit NotificationFlags(std::shared_ptr<const Waker> source)
         : wake(std::move(source))
@@ -358,10 +398,8 @@ public:
             }
             [engine_ disconnectNodeOutput:player_];
             NSError* connectError = nil;
-            if (![engine_ connect:player_
-                               to:engine_.mainMixerNode
-                           format:format_
-                            error:&connectError]) {
+            if (!connectNodes(
+                    engine_, player_, engine_.mainMixerNode, format_, &connectError)) {
                 configured_ = false;
                 prepared_ = false;
                 running_ = false;
@@ -443,7 +481,7 @@ public:
             // Before the player plays, so that its first completion has it.
             if (engineRuns)
                 measureOutputLatency();
-            if (!engineRuns || ![player_ playAndReturnError:&error]) {
+            if (!engineRuns || !playNode(player_, &error)) {
                 deactivateSession();
                 failToStart();
                 return true;
@@ -630,7 +668,7 @@ public:
                     (engine_.isRunning || [engine_ startAndReturnError:&error]);
                 if (engineRuns)
                     measureOutputLatency();
-                if (engineRuns && [player_ playAndReturnError:&error]) {
+                if (engineRuns && playNode(player_, &error)) {
                     faulted_ = false;
                 } else {
                     abortPending();
@@ -876,7 +914,7 @@ private:
                       // the periods handed to it later start at once instead
                       // of after the player's own start-up.
                       if (running) {
-                          (void)[player playAndReturnError:&error];
+                          (void)playNode(player, &error);
                           // The engine reports that it runs well before the
                           // audio hardware delivers its first cycle: a fifth
                           // of a second has been measured on the iPad mini
@@ -942,7 +980,7 @@ private:
             if (engine_.isRunning || [engine_ startAndReturnError:&error]) {
                 measureOutputLatency();
                 leaveMute();
-                playing = [player_ playAndReturnError:&error];
+                playing = playNode(player_, &error);
             }
         } @catch (NSException*) {
         }

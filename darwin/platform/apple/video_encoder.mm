@@ -1235,8 +1235,14 @@ private:
             if (!apply(session, UML_KEY(AverageBitRate), @(s.bitrate), true)) return refuse("AverageBitRate");
             if (s.peakBitrate && !apply(session, UML_KEY(DataRateLimits), @[@(s.peakBitrate / 8), @1.0], !plan_.lowLatency))
                 return refuse("DataRateLimits");
-            if (s.bufferBits && s.bitrate)
-                (void)apply(session, UML_KEY(VBVBufferDuration), @(double(s.bufferBits) / double(s.bitrate)), false);
+            if (s.bufferBits && s.bitrate) {
+#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000) || \
+    (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000)
+                if (@available(macOS 26.0, iOS 26.0, *)) {
+                    (void)apply(session, UML_KEY(VBVBufferDuration), @(double(s.bufferBits) / double(s.bitrate)), false);
+                }
+#endif
+            }
             break;
         case VideoRateControl::constantBitrate:
             if (!apply(session, UML_KEY(ConstantBitRate), @(s.bitrate), true)) return refuse("ConstantBitRate");

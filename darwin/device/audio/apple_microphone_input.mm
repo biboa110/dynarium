@@ -22,6 +22,35 @@ constexpr AVAudioFrameCount maximumConvertedFrames = 24000;
 // The shortest delivery the tap supports, which is also its lowest latency.
 constexpr double tapSeconds = 0.1;
 
+[[nodiscard]] bool installInputTap(
+    AVAudioNode* node,
+    AVAudioNodeBus bus,
+    AVAudioFrameCount bufferSize,
+    AVAudioFormat* format,
+    NSError** error,
+    AVAudioNodeTapBlock tapBlock)
+{
+#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000) || \
+    (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000)
+    if (@available(macOS 27.0, iOS 27.0, *)) {
+        return [node installTapOnBus:bus
+                          bufferSize:bufferSize
+                              format:format
+                               error:error
+                               block:tapBlock] ? true : false;
+    }
+#endif
+    (void)error;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [node installTapOnBus:bus
+               bufferSize:bufferSize
+                   format:format
+                    block:tapBlock];
+#pragma clang diagnostic pop
+    return true;
+}
+
 /* The microphone's engine. Nothing here exists until start() is called, and
  * start() is called only for a guest that records while the user's setting is
  * on and permitted, so no AVAudioEngine input node is touched otherwise. */
@@ -128,43 +157,44 @@ private:
             const std::uint32_t frameBytes =
                 channels * protocol::bytesPerSample;
             NSError* tapError = nil;
-            const BOOL tapped = [input
-                installTapOnBus:0
-                     bufferSize:static_cast<AVAudioFrameCount>(
-                                    inputFormat.sampleRate * tapSeconds)
-                         format:inputFormat
-                          error:&tapError
-                          block:^(AVAudioPCMBuffer* buffer, AVAudioTime*) {
-                               __block BOOL supplied = NO;
-                               converted.frameLength = 0;
-                               NSError* error = nil;
-                               const auto status = [converter
-                                   convertToBuffer:converted
-                                             error:&error
-                                withInputFromBlock:^AVAudioBuffer*(
-                                    AVAudioPacketCount,
-                                    AVAudioConverterInputStatus* inputStatus) {
-                                  if (supplied) {
-                                      *inputStatus =
-                                          AVAudioConverterInputStatus_NoDataNow;
-                                      return nil;
-                                  }
-                                  supplied = YES;
-                                  *inputStatus =
-                                      AVAudioConverterInputStatus_HaveData;
-                                  return buffer;
-                                }];
-                               if (status == AVAudioConverterOutputStatus_Error)
-                                   return;
-                               const auto* data = static_cast<const std::uint8_t*>(
-                                   converted.audioBufferList->mBuffers[0].mData);
-                               if (data != nullptr) {
-                                   (void)destination->write(std::span(
-                                       data,
-                                       std::size_t {converted.frameLength} *
-                                           frameBytes));
-                               }
-                             }];
+            const bool tapped = installInputTap(
+                input,
+                0,
+                static_cast<AVAudioFrameCount>(
+                    inputFormat.sampleRate * tapSeconds),
+                inputFormat,
+                &tapError,
+                ^(AVAudioPCMBuffer* buffer, AVAudioTime*) {
+                    __block BOOL supplied = NO;
+                    converted.frameLength = 0;
+                    NSError* error = nil;
+                    const auto status = [converter
+                        convertToBuffer:converted
+                                  error:&error
+                     withInputFromBlock:^AVAudioBuffer*(
+                         AVAudioPacketCount,
+                         AVAudioConverterInputStatus* inputStatus) {
+                       if (supplied) {
+                           *inputStatus =
+                               AVAudioConverterInputStatus_NoDataNow;
+                           return nil;
+                       }
+                       supplied = YES;
+                       *inputStatus =
+                           AVAudioConverterInputStatus_HaveData;
+                       return buffer;
+                     }];
+                    if (status == AVAudioConverterOutputStatus_Error)
+                        return;
+                    const auto* data = static_cast<const std::uint8_t*>(
+                        converted.audioBufferList->mBuffers[0].mData);
+                    if (data != nullptr) {
+                        (void)destination->write(std::span(
+                            data,
+                            std::size_t {converted.frameLength} *
+                                frameBytes));
+                    }
+                });
             if (!tapped) {
                 closeSession();
                 return false;
