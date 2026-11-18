@@ -33,6 +33,45 @@ archive()
 	xcrun ar rcs "$1" "$object"
 }
 
+# append_archive_member ARCHIVE OBJECT: append OBJECT to ARCHIVE using BSD
+# #1/<len> extended naming and 8-byte payload alignment without running ranlib
+# (Xcode 16 ranlib rejects mixed-platform and bitcode archive members).
+append_archive_member()
+{
+	python3 - "$1" "$2" <<'EOF'
+import os
+import sys
+
+ar_path, member_path = sys.argv[1:3]
+with open(ar_path, "rb") as stream:
+    ar_data = bytearray(stream.read())
+if not ar_data.startswith(b"!<arch>\n"):
+    sys.exit(f"{ar_path} is not a BSD ar archive")
+if len(ar_data) % 2 == 1:
+    ar_data.append(0x0A)
+with open(member_path, "rb") as stream:
+    member_bytes = stream.read()
+raw_name = os.path.basename(member_path).encode("ascii") + b"\x00"
+pad_zeros = (8 - ((len(ar_data) + 60 + len(raw_name)) % 8)) % 8
+name_block = raw_name + (b"\x00" * pad_zeros)
+body_size = len(name_block) + len(member_bytes)
+header = (
+    f"#1/{len(name_block):<13d}"
+    f"{'0':<12s}{'0':<6s}{'0':<6s}{'100644':<8s}"
+    f"{body_size:<10d}`\n"
+).encode("ascii")
+if len(header) != 60:
+    sys.exit(f"unexpected ar header size: {len(header)}")
+ar_data.extend(header)
+ar_data.extend(name_block)
+ar_data.extend(member_bytes)
+if body_size % 2 == 1:
+    ar_data.append(0x0A)
+with open(ar_path, "wb") as stream:
+    stream.write(ar_data)
+EOF
+}
+
 # make_prefix PREFIX PLATFORM: a prefix that passes verification.
 make_prefix()
 {
@@ -126,7 +165,7 @@ for member in iphoneos:arm64-apple-ios15.0 \
 	copy_fixture "$CASE"
 	xcrun --sdk "${member%%:*}" clang -target "${member#*:}" \
 		-c "$TEST_ROOT/fixture.c" -o "$TEST_ROOT/other-member.o"
-	xcrun ar rs "$CASE/lib/libslirp.a" "$TEST_ROOT/other-member.o" 2>/dev/null
+	append_archive_member "$CASE/lib/libslirp.a" "$TEST_ROOT/other-member.o"
 	expect_cmake_diagnostic "lib/libslirp.a" verify "$CASE" ios
 done
 
@@ -223,14 +262,14 @@ if printf '%s\n' "$OTOOL_NO_BV" | grep -q 'cmd LC_BUILD_VERSION$'; then
 fi
 OTOOL_TWO_BV="$(otool -l "$MEMBERS/two-build-versions.o")"
 [ "$(printf '%s\n' "$OTOOL_TWO_BV" |
-	grep -c 'cmd LC_BUILD_VERSION$')" -eq 2 ] ||
+	awk '/cmd LC_BUILD_VERSION$/ { n++ } END { print n + 0 }')" -eq 2 ] ||
 	fail "the fixture member lacks a second build-version command"
 xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 -flto \
 	-c "$TEST_ROOT/fixture.c" -o "$MEMBERS/bitcode.o"
 for member in no-build-version two-build-versions bitcode; do
 	CASE="$TEST_ROOT/member-$member"
 	copy_fixture "$CASE"
-	xcrun ar rs "$CASE/lib/libslirp.a" "$MEMBERS/$member.o" 2>/dev/null
+	append_archive_member "$CASE/lib/libslirp.a" "$MEMBERS/$member.o"
 	expect_cmake_diagnostic "lib/libslirp.a($member.o)" verify "$CASE" ios
 done
 

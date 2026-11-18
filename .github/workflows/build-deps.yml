@@ -82,8 +82,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: test_check_no_fexcore (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: test_check_no_fexcore"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_check_no_fexcore::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="test_check_no_fexcore exited with code $rc"
+            printf '::error title=test_check_no_fexcore::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -95,8 +97,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: test_check_privacy_manifests (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: test_check_privacy_manifests"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_check_privacy_manifests::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="test_check_privacy_manifests exited with code $rc"
+            printf '::error title=test_check_privacy_manifests::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -107,8 +111,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: test_verify_ios_static_xcframework (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: test_verify_ios_static_xcframework"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_verify_ios_static_xcframework::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="test_verify_ios_static_xcframework exited with code $rc"
+            printf '::error title=test_verify_ios_static_xcframework::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -119,8 +125,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: test_verify_ios_network_prefix (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: test_verify_ios_network_prefix"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_verify_ios_network_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="test_verify_ios_network_prefix exited with code $rc"
+            printf '::error title=test_verify_ios_network_prefix::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -132,8 +140,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: test_check_software_renderer (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: test_check_software_renderer"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_check_software_renderer::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="test_check_software_renderer exited with code $rc"
+            printf '::error title=test_check_software_renderer::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -144,8 +154,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: test_verify_apple_gpu_software_prefix (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: test_verify_apple_gpu_software_prefix"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=test_verify_apple_gpu_software_prefix::%s\n' "$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="test_verify_apple_gpu_software_prefix exited with code $rc"
+            printf '::error title=test_verify_apple_gpu_software_prefix::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -206,8 +218,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: build-core-ios-deps (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: build-core-ios-deps"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-core-ios-deps::%s\n' "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="build-core-ios-deps exited with code $rc"
+            printf '::error title=build-core-ios-deps::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -228,8 +242,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: build-apple-gpu-ios (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: build-apple-gpu-ios"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-apple-gpu-ios::%s\n' "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="build-apple-gpu-ios exited with code $rc"
+            printf '::error title=build-apple-gpu-ios::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -244,8 +260,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: build-apple-gpu-ios-simulator (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: build-apple-gpu-ios-simulator"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-apple-gpu-ios-simulator::%s\n' "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="build-apple-gpu-ios-simulator exited with code $rc"
+            printf '::error title=build-apple-gpu-ios-simulator::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -286,8 +304,10 @@ jobs:
             cat "$log"; rm -f "$log"
           else
             rc=$?; cat "$log"
+            { printf '=== FAILED: kernarium-runtime-build (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
             { echo "### Failed: kernarium-runtime-build"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=kernarium-runtime-build::%s\n' "$(tail -n 30 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="kernarium-runtime-build exited with code $rc"
+            printf '::error title=kernarium-runtime-build::%s\n' "$msg"
             rm -f "$log"; exit "$rc"
           fi
 
@@ -332,3 +352,30 @@ jobs:
               --title "Dynarium iOS 16.0 Dependencies (Latest)" \
               --notes "Prebuilt iOS 16.0 ARM64 dependency prefixes (zstd, gptfdisk, GLib/libslirp network, and Mesa llvmpipe/softpipe GPU stack for iOS device & Simulator) verified against KernariumRuntime Android 6.18 4K."
           fi
+
+      - name: Publish failure diagnostics check-run
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib, subprocess
+          p = pathlib.Path("/tmp/ci-failure.log")
+          text = p.read_text(encoding="utf-8", errors="replace")[-60000:] if p.exists() else "Step failed outside wrapped log capture."
+          payload = {
+              "name": "ci-failure-diagnostics",
+              "head_sha": os.environ["GITHUB_SHA"],
+              "status": "completed",
+              "conclusion": "failure",
+              "output": {
+                  "title": "CI Step Failure Log",
+                  "summary": "```text\n" + text + "\n```",
+              },
+          }
+          subprocess.run(
+              ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/check-runs", "--input", "-"],
+              input=json.dumps(payload),
+              text=True,
+              check=False,
+          )
+          EOF
