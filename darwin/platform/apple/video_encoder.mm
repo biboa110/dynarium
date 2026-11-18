@@ -1079,7 +1079,9 @@ private:
     {
         const auto& settings = plan_.settings;
         NSMutableDictionary* specification = [NSMutableDictionary dictionary];
-        specification[(__bridge NSString*)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder] = @YES;
+        if (@available(iOS 17.4, *)) {
+            specification[(__bridge NSString*)kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder] = @YES;
+        }
         if (plan_.lowLatency) specification[(__bridge NSString*)kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = @YES;
         NSDictionary* source = @{
             (__bridge NSString*)kCVPixelBufferPixelFormatTypeKey: @(plan_.pixelFormat),

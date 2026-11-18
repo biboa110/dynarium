@@ -169,7 +169,7 @@ jobs:
 
       - name: Cache dependency Git fetches and LLVM archive
         id: dep-fetch-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .build/dependency-cache
           key: dep-cache-gpu-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv') }}
@@ -178,7 +178,7 @@ jobs:
 
       - name: Cache verified core iOS prefixes
         id: core-prefix-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             .build/dependencies/ios-zstd
@@ -189,14 +189,14 @@ jobs:
 
       - name: Cache verified Apple GPU software prefix (ios)
         id: gpu-ios-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .build/dependencies/apple-gpu-vulkan-experiment
           key: gpu-sw-v1-ios-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv', 'dependencies/platforms/*gpu-software*.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
 
       - name: Cache verified Apple GPU software prefix (ios-simulator)
         id: gpu-sim-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .build/dependencies/apple-gpu-vulkan-experiment/ios-simulator-arm64
           key: gpu-sw-v1-ios-simulator-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv', 'dependencies/platforms/*gpu-software*.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
@@ -276,6 +276,38 @@ jobs:
           ./dependencies/build-apple-gpu.sh --platform ios --verify-only
           ./dependencies/build-apple-gpu.sh --platform ios-simulator --verify-only
 
+      - name: Save dependency Git fetches and LLVM archive cache
+        if: steps.dep-fetch-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build/dependency-cache
+          key: ${{ steps.dep-fetch-cache.outputs.cache-primary-key }}
+
+      - name: Save verified core iOS prefixes cache
+        if: steps.core-prefix-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build/dependencies/ios-zstd
+            .build/dependencies/ios-storage
+            .build/dependencies/ios-device-arm64
+            .build/dependencies/ios-simulator-arm64
+          key: ${{ steps.core-prefix-cache.outputs.cache-primary-key }}
+
+      - name: Save verified Apple GPU software prefix cache (ios)
+        if: steps.gpu-ios-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment
+          key: ${{ steps.gpu-ios-cache.outputs.cache-primary-key }}
+
+      - name: Save verified Apple GPU software prefix cache (ios-simulator)
+        if: steps.gpu-sim-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment/ios-simulator-arm64
+          key: ${{ steps.gpu-sim-cache.outputs.cache-primary-key }}
+
       - name: Download accepted Android 6.18 4K kernel artifact
         run: |
           mkdir -p .build/kernel/artifacts .build/kernel/tmp
@@ -313,20 +345,32 @@ jobs:
 
       - name: Verify iOS 16.0 Mach-O minos and software renderer symbols
         run: |
-          framework_dir=".build/kernarium-runtime-ios-device-android-4k/Kernarium/Runtime/KRuntime_Android_6_18_4K.framework"
-          runtime_bin="$framework_dir/KRuntime_Android_6_18_4K"
-          test -f "$runtime_bin"
-          xcrun otool -l "$runtime_bin" | awk '
-            /cmd LC_BUILD_VERSION/ { in_bv=1; next }
-            in_bv && /minos / { print; if ($2 != "16.0") exit 1; found=1; in_bv=0 }
-            END { if (!found) exit 1 }
-          '
-          plist_minos=$(plutil -extract MinimumOSVersion raw -o - "$framework_dir/Info.plist")
-          echo "Runtime Info.plist MinimumOSVersion: $plist_minos"
-          [ "$plist_minos" = "16.0" ]
-          python3 -B scripts/check-software-renderer.py --present \
-            .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64/Frameworks \
-            "$framework_dir"
+          log=$(mktemp)
+          if (
+            framework_dir=".build/kernarium-runtime-ios-device-android-4k/Kernarium/Runtime/KRuntime_Android_6_18_4K.framework"
+            runtime_bin="$framework_dir/KRuntime_Android_6_18_4K"
+            test -f "$runtime_bin"
+            xcrun otool -l "$runtime_bin" | awk '
+              /cmd LC_BUILD_VERSION/ { in_bv=1; next }
+              in_bv && /minos / { print; if ($2 != "16.0") exit 1; found=1; in_bv=0 }
+              END { if (!found) exit 1 }
+            '
+            plist_minos=$(plutil -extract MinimumOSVersion raw -o - "$framework_dir/Info.plist")
+            echo "Runtime Info.plist MinimumOSVersion: $plist_minos"
+            [ "$plist_minos" = "16.0" ]
+            python3 -B scripts/check-software-renderer.py --present \
+              .build/dependencies/apple-gpu-vulkan-experiment/ios-device-arm64/Frameworks \
+              "$framework_dir"
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: verify-runtime-macho (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: verify-runtime-macho"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            msg="$(tail -n 20 "$log" | tr '\r\n' '  ' | cut -c1-800)"; [ -n "$msg" ] || msg="verify-runtime-macho exited with code $rc"
+            printf '::error title=verify-runtime-macho::%s\n' "$msg"
+            rm -f "$log"; exit "$rc"
+          fi
 
       - name: Package dynarium-deps-ios16-arm64.tar.gz
         run: |

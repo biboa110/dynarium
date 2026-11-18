@@ -71,29 +71,32 @@ bool high10Available()
     return false;
 #else
     static const bool available = [] {
-        // Same profile-specific sequence as the maintained Virgl backend.
-        const std::uint8_t sps[] = {0x67, 0x6e, 0x00, 0x0a, 0xa6, 0xcd, 0x94, 0x42,
-            0x6c, 0x04, 0x40, 0x00, 0x00, 0x03, 0x00, 0x40, 0x00, 0x00, 0x1e, 0x03,
-            0xc4, 0x89, 0x65, 0x80};
-        const std::uint8_t pps[] = {0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0};
-        const std::uint8_t* data[] = {sps, pps};
-        const std::size_t sizes[] = {sizeof(sps), sizeof(pps)};
-        CFObject<CMVideoFormatDescriptionRef> description;
-        CFObject<VTDecompressionSessionRef> session;
-        CFObject<CFTypeRef> hardware;
-        if (CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault,
-            2, data, sizes, 4, description.address()) != noErr) return false;
-        NSDictionary* specification = @{(__bridge NSString*)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES};
-        NSDictionary* attributes = @{(__bridge NSString*)kCVPixelBufferPixelFormatTypeKey:
-            @(kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)};
-        if (VTDecompressionSessionCreate(kCFAllocatorDefault, description.get(),
-            (__bridge CFDictionaryRef)specification, (__bridge CFDictionaryRef)attributes,
-            nullptr, session.address()) != noErr) return false;
-        const bool result = VTSessionCopyProperty(session.get(),
-            kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
-            kCFAllocatorDefault, hardware.address()) == noErr && hardware.get() == kCFBooleanTrue;
-        VTDecompressionSessionInvalidate(session.get());
-        return result;
+        if (@available(iOS 17.0, *)) {
+            // Same profile-specific sequence as the maintained Virgl backend.
+            const std::uint8_t sps[] = {0x67, 0x6e, 0x00, 0x0a, 0xa6, 0xcd, 0x94, 0x42,
+                0x6c, 0x04, 0x40, 0x00, 0x00, 0x03, 0x00, 0x40, 0x00, 0x00, 0x1e, 0x03,
+                0xc4, 0x89, 0x65, 0x80};
+            const std::uint8_t pps[] = {0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0};
+            const std::uint8_t* data[] = {sps, pps};
+            const std::size_t sizes[] = {sizeof(sps), sizeof(pps)};
+            CFObject<CMVideoFormatDescriptionRef> description;
+            CFObject<VTDecompressionSessionRef> session;
+            CFObject<CFTypeRef> hardware;
+            if (CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault,
+                2, data, sizes, 4, description.address()) != noErr) return false;
+            NSDictionary* specification = @{(__bridge NSString*)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES};
+            NSDictionary* attributes = @{(__bridge NSString*)kCVPixelBufferPixelFormatTypeKey:
+                @(kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)};
+            if (VTDecompressionSessionCreate(kCFAllocatorDefault, description.get(),
+                (__bridge CFDictionaryRef)specification, (__bridge CFDictionaryRef)attributes,
+                nullptr, session.address()) != noErr) return false;
+            const bool result = VTSessionCopyProperty(session.get(),
+                kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                kCFAllocatorDefault, hardware.address()) == noErr && hardware.get() == kCFBooleanTrue;
+            VTDecompressionSessionInvalidate(session.get());
+            return result;
+        }
+        return false;
     }();
     return available;
 #endif
@@ -106,7 +109,9 @@ bool high10Available()
 bool vp9Available()
 {
     static const bool available = [] {
+#if TARGET_OS_OSX
         VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9);
+#endif
         return bool(VTIsHardwareDecodeSupported(kCMVideoCodecType_VP9));
     }();
     return available;
@@ -862,7 +867,10 @@ private:
         const OSType planarFormat = format_.bitDepth <= 8
             ? (fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
             : (fullRange ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange);
-        NSDictionary* specification = @{(__bridge NSString*)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES};
+        NSDictionary* specification = nil;
+        if (@available(iOS 17.0, *)) {
+            specification = @{(__bridge NSString*)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES};
+        }
         VTDecompressionOutputCallbackRecord callback {output, this};
         const auto create = [&](OSType pixelFormat) {
             NSDictionary* attributes = @{(__bridge NSString*)kCVPixelBufferPixelFormatTypeKey: @(pixelFormat),
@@ -882,17 +890,19 @@ private:
             sessionLayout_ = VideoPixelLayout::planarYuv;
             checked(create(planarFormat), "create hardware video decoder");
         }
-        CFObject<CFTypeRef> hardware;
-        const auto status = VTSessionCopyProperty(session_.get(),
-            kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
-            kCFAllocatorDefault, hardware.address());
-        // Apple's JPEG decoder honors the required-hardware creation flag but
-        // does not implement this property, as in the existing Virgl backend.
-        if (!((codec_ == VideoCodec::jpeg || codec_ == VideoCodec::vp9) &&
-              status == kVTPropertyNotSupportedErr)) {
-            checked(status, "verify hardware video decoder");
-            if (hardware.get() != kCFBooleanTrue)
-                throw std::runtime_error("video decoder did not select hardware");
+        if (@available(iOS 17.0, *)) {
+            CFObject<CFTypeRef> hardware;
+            const auto status = VTSessionCopyProperty(session_.get(),
+                kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                kCFAllocatorDefault, hardware.address());
+            // Apple's JPEG decoder honors the required-hardware creation flag but
+            // does not implement this property, as in the existing Virgl backend.
+            if (!((codec_ == VideoCodec::jpeg || codec_ == VideoCodec::vp9) &&
+                  status == kVTPropertyNotSupportedErr)) {
+                checked(status, "verify hardware video decoder");
+                if (hardware.get() != kCFBooleanTrue)
+                    throw std::runtime_error("video decoder did not select hardware");
+            }
         }
     }
 
