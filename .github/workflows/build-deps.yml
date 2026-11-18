@@ -33,7 +33,7 @@ concurrency:
 jobs:
   build-ios16-deps:
     name: Build & Verify iOS 16 Dependencies + Android Runtime
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 180
     steps:
       - name: Checkout repository
