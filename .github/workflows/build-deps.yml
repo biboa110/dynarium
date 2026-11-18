@@ -19,6 +19,9 @@ on:
       - '.gitattributes'
       - '.github/workflows/build-deps.yml'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: write
 
@@ -27,10 +30,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ios-core-deps:
-    name: iOS 16 Core Dependencies (zstd, gptfdisk, network)
+  build-ios16-deps:
+    name: Build & Verify iOS 16 Dependencies + Android Runtime
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -116,111 +119,7 @@ jobs:
             rm -f "$log"; exit "$rc"
           fi
 
-      - name: Install build tools
-        run: |
-          brew install cmake ninja meson pkg-config autoconf automake libtool gettext
-
-      - name: Cache dependency Git fetches
-        uses: actions/cache@v4
-        with:
-          path: .build/dependency-cache
-          key: dep-cache-core-v1-${{ hashFiles('dependencies/manifest.tsv') }}
-
-      - name: Cache verified core iOS prefixes
-        id: core-prefix-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            .build/dependencies/ios-zstd
-            .build/dependencies/ios-storage
-            .build/dependencies/ios-device-arm64
-            .build/dependencies/ios-simulator-arm64
-          key: core-prefixes-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/platforms/ios-*compression*.tsv', 'dependencies/platforms/ios-*storage*.tsv', 'dependencies/platforms/ios-*network*.tsv', 'dependencies/build-ios-*.sh', 'dependencies/ios-static-xcframework.sh', 'dependencies/cmake/VerifyIos*.cmake', 'dependencies/patches/gptfdisk/**', 'dependencies/patches/glib-ios/**', 'dependencies/patches/libslirp/**') }}
-
-      - name: Prepare core iOS dependency sources
-        if: steps.core-prefix-cache.outputs.cache-hit != 'true'
-        run: |
-          ./dependencies/prepare.sh --product ios-compression
-          ./dependencies/prepare.sh --product ios-storage
-          ./dependencies/prepare.sh --product ios-network
-
-      - name: Build iOS compression, storage, and network prefixes (device + simulator)
-        run: |
-          ./dependencies/build-ios-zstd.sh --jobs 4
-          ./dependencies/build-ios-storage.sh --jobs 4
-          ./dependencies/build-ios-network.sh --platform ios --jobs 4
-          ./dependencies/build-ios-network.sh --platform ios-simulator --jobs 4
-
-      - name: Pack core dependency prefixes
-        run: |
-          mkdir -p .build/artifacts
-          tar -czf .build/artifacts/ios-core-deps-prefixes.tar.gz \
-            -C .build/dependencies \
-            ios-zstd ios-storage ios-device-arm64 ios-simulator-arm64
-
-      - name: Upload core dependency prefixes
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-core-deps-prefixes
-          path: .build/artifacts/ios-core-deps-prefixes.tar.gz
-          retention-days: 7
-
-  ios-gpu-software:
-    name: iOS 16 Mesa Software GPU (${{ matrix.platform }})
-    needs: [ios-core-deps]
-    runs-on: macos-15
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        platform: [ios, ios-simulator]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build tools and Mesa Python environment
-        run: |
-          brew install cmake ninja pkg-config
-          python3 -m venv .build/gpu-tools-venv
-          .build/gpu-tools-venv/bin/pip install --upgrade pip meson mako pyyaml packaging
-
-      - name: Cache dependency Git fetches and LLVM archive
-        uses: actions/cache@v4
-        with:
-          path: .build/dependency-cache
-          key: dep-cache-gpu-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv') }}
-
-      - name: Cache verified Apple GPU software prefix (${{ matrix.platform }})
-        id: gpu-prefix-cache
-        uses: actions/cache@v4
-        with:
-          path: .build/dependencies/apple-gpu-vulkan-experiment
-          key: gpu-sw-v1-${{ matrix.platform }}-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv', 'dependencies/platforms/*gpu-software*.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
-
-      - name: Prepare GPU sources and LLVM archive
-        if: steps.gpu-prefix-cache.outputs.cache-hit != 'true'
-        run: |
-          ./dependencies/prepare.sh --product apple-gpu-vulkan-experiment
-          ./dependencies/prepare.sh --archive-manifest dependencies/llvm/archives.tsv
-
-      - name: Build Apple GPU software prefix (${{ matrix.platform }})
-        run: |
-          log=$(mktemp)
-          if UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
-            ./dependencies/build-apple-gpu.sh \
-              --platform "${{ matrix.platform }}" \
-              --renderer software \
-              --jobs 4 >"$log" 2>&1; then
-            cat "$log"; rm -f "$log"
-          else
-            rc=$?; cat "$log"
-            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-apple-gpu-%s::%s\n' "${{ matrix.platform }}" "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
-            rm -f "$log"; exit "$rc"
-          fi
-
       - name: Test check-software-renderer.py
-        if: matrix.platform == 'ios-simulator'
         run: |
           log=$(mktemp)
           if python3 -B tests/tooling/cmake/test_check_software_renderer.py \
@@ -233,7 +132,6 @@ jobs:
           fi
 
       - name: Test VerifyAppleGpuPrefix (software)
-        if: matrix.platform == 'ios-simulator'
         run: |
           log=$(mktemp)
           if ./tests/tooling/dependencies/test_verify_apple_gpu_software_prefix.sh >"$log" 2>&1; then
@@ -244,51 +142,105 @@ jobs:
             rm -f "$log"; exit "$rc"
           fi
 
-      - name: Pack Apple GPU software prefix (${{ matrix.platform }})
+      - name: Install build tools and Mesa Python environment
         run: |
-          mkdir -p .build/artifacts
-          case "${{ matrix.platform }}" in
-            ios) prefix_dir=ios-device-arm64 ;;
-            ios-simulator) prefix_dir=ios-simulator-arm64 ;;
-          esac
-          tar -czf ".build/artifacts/ios-gpu-software-${{ matrix.platform }}.tar.gz" \
-            -C .build/dependencies/apple-gpu-vulkan-experiment \
-            "$prefix_dir"
+          brew install cmake ninja meson pkg-config autoconf automake libtool gettext
+          python3 -m venv .build/gpu-tools-venv
+          .build/gpu-tools-venv/bin/pip install --upgrade pip meson mako pyyaml packaging
 
-      - name: Upload Apple GPU software prefix (${{ matrix.platform }})
-        uses: actions/upload-artifact@v4
+      - name: Cache dependency Git fetches and LLVM archive
+        id: dep-fetch-cache
+        uses: actions/cache@v4
         with:
-          name: ios-gpu-software-${{ matrix.platform }}
-          path: .build/artifacts/ios-gpu-software-${{ matrix.platform }}.tar.gz
-          retention-days: 7
+          path: .build/dependency-cache
+          key: dep-cache-gpu-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv') }}
+          restore-keys: |
+            dep-cache-gpu-v1-
 
-  package-and-smoke-ios16:
-    name: Verify Prefixes & Smoke-Build Android 6.18 Runtime (iOS 16.0)
-    needs: [ios-core-deps, ios-gpu-software]
-    runs-on: macos-15
-    timeout-minutes: 60
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build tools
-        run: |
-          brew install cmake ninja
-
-      - name: Download built dependency artifacts
-        uses: actions/download-artifact@v4
+      - name: Cache verified core iOS prefixes
+        id: core-prefix-cache
+        uses: actions/cache@v4
         with:
-          path: .build/downloaded-artifacts
+          path: |
+            .build/dependencies/ios-zstd
+            .build/dependencies/ios-storage
+            .build/dependencies/ios-device-arm64
+            .build/dependencies/ios-simulator-arm64
+          key: core-prefixes-v1-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/platforms/ios-*compression*.tsv', 'dependencies/platforms/ios-*storage*.tsv', 'dependencies/platforms/ios-*network*.tsv', 'dependencies/build-ios-*.sh', 'dependencies/ios-static-xcframework.sh', 'dependencies/cmake/VerifyIos*.cmake', 'dependencies/patches/gptfdisk/**', 'dependencies/patches/glib-ios/**', 'dependencies/patches/libslirp/**') }}
 
-      - name: Assemble .build/dependencies and verify all 6 prefixes
+      - name: Cache verified Apple GPU software prefix (ios)
+        id: gpu-ios-cache
+        uses: actions/cache@v4
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment
+          key: gpu-sw-v1-ios-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv', 'dependencies/platforms/*gpu-software*.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
+
+      - name: Cache verified Apple GPU software prefix (ios-simulator)
+        id: gpu-sim-cache
+        uses: actions/cache@v4
+        with:
+          path: .build/dependencies/apple-gpu-vulkan-experiment/ios-simulator-arm64
+          key: gpu-sw-v1-ios-simulator-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/llvm/archives.tsv', 'dependencies/platforms/*gpu-software*.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
+
+      - name: Prepare core iOS dependency sources
+        if: steps.core-prefix-cache.outputs.cache-hit != 'true'
         run: |
-          mkdir -p .build/dependencies/apple-gpu-vulkan-experiment
-          tar -xzf .build/downloaded-artifacts/ios-core-deps-prefixes/ios-core-deps-prefixes.tar.gz \
-            -C .build/dependencies
-          tar -xzf .build/downloaded-artifacts/ios-gpu-software-ios/ios-gpu-software-ios.tar.gz \
-            -C .build/dependencies/apple-gpu-vulkan-experiment
-          tar -xzf .build/downloaded-artifacts/ios-gpu-software-ios-simulator/ios-gpu-software-ios-simulator.tar.gz \
-            -C .build/dependencies/apple-gpu-vulkan-experiment
+          ./dependencies/prepare.sh --product ios-compression
+          ./dependencies/prepare.sh --product ios-storage
+          ./dependencies/prepare.sh --product ios-network
+
+      - name: Build iOS compression, storage, and network prefixes (device + simulator)
+        run: |
+          log=$(mktemp)
+          if (./dependencies/build-ios-zstd.sh --jobs 4 && \
+              ./dependencies/build-ios-storage.sh --jobs 4 && \
+              ./dependencies/build-ios-network.sh --platform ios --jobs 4 && \
+              ./dependencies/build-ios-network.sh --platform ios-simulator --jobs 4) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-core-ios-deps::%s\n' "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Prepare GPU sources and LLVM archive
+        if: steps.gpu-ios-cache.outputs.cache-hit != 'true' || steps.gpu-sim-cache.outputs.cache-hit != 'true'
+        run: |
+          ./dependencies/prepare.sh --product apple-gpu-vulkan-experiment
+          ./dependencies/prepare.sh --archive-manifest dependencies/llvm/archives.tsv
+
+      - name: Build Apple GPU software prefix (ios)
+        run: |
+          log=$(mktemp)
+          if UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
+            ./dependencies/build-apple-gpu.sh \
+              --platform ios \
+              --renderer software \
+              --jobs 4 >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-apple-gpu-ios::%s\n' "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Build Apple GPU software prefix (ios-simulator)
+        run: |
+          log=$(mktemp)
+          if UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
+            ./dependencies/build-apple-gpu.sh \
+              --platform ios-simulator \
+              --renderer software \
+              --jobs 4 >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            printf '::error file=.github/workflows/build-deps.yml,line=1,title=build-apple-gpu-ios-simulator::%s\n' "$(tail -n 25 "$log" | tr '\r\n' '  ' | cut -c1-900)"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Verify all 6 iOS 16 dependency prefixes
+        run: |
           ./dependencies/build-ios-zstd.sh --verify-only
           ./dependencies/build-ios-storage.sh --verify-only
           ./dependencies/build-ios-network.sh --platform ios --verify-only
