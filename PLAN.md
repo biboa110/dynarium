@@ -123,7 +123,7 @@ Vì máy lập trình chạy **Windows** (không có Xcode hay Apple SDK), toàn
 
 ## 5. Lộ trình Triển khai 5 Giai đoạn (Checklist Tiến độ)
 
-- [ ] **Giai đoạn 1 — Khởi tạo Nguồn, Hạ sàn CMake/Deps xuống `iOS 16.0` & Xanh hóa Workflow Dependencies**
+- [x] **Giai đoạn 1 — Khởi tạo Nguồn, Hạ sàn CMake/Deps xuống `iOS 16.0` & Xanh hóa Workflow Dependencies**
   - Nhập cây mã nguồn lõi từ `imxieyi/Kernarium` vào `C:\dynarium`, thiết lập `.gitattributes` (ép `LF`), thêm `CREDITS.md` và giữ nguyên giấy phép `GPL-2.0-or-later` / `Apache-2.0`.
   - Hạ mốc khóa `27.0` trong `cmake/toolchains/Apple.cmake` và các script `dependencies/build-ios-*.sh` xuống `16.0`.
   - Viết `.github/workflows/build-deps.yml` và chạy thành công bộ thư viện nền + `Mesa software/llvmpipe` (làm đường ống test khởi động đầu tiên).
