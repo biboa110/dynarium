@@ -138,11 +138,8 @@ MEMBERS="$TEST_ROOT/members"
 mkdir "$MEMBERS"
 xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 \
 	-c "$TEST_ROOT/fixture.c" -o "$MEMBERS/ios.o"
-xcrun vtool -remove-build-version ios -output "$MEMBERS/no-build-version.o" \
-	"$MEMBERS/ios.o"
-cp "$MEMBERS/ios.o" "$MEMBERS/two-build-versions.o"
-# Copy the build-version command into header padding (shifting offsets if none).
-python3 - "$MEMBERS/two-build-versions.o" <<'EOF'
+# Edit LC_BUILD_VERSION directly on MH_OBJECT because vtool(1) rejects .o files.
+python3 - "$MEMBERS/ios.o" "$MEMBERS/no-build-version.o" "$MEMBERS/two-build-versions.o" <<'EOF'
 import struct
 import sys
 
@@ -162,52 +159,70 @@ def shift_u64(buf, pos, end, delta):
     if val >= end:
         struct.pack_into("<Q", buf, pos, val + delta)
 
-path = sys.argv[1]
-with open(path, "rb") as stream:
-    data = bytearray(stream.read())
-if struct.unpack_from("<I", data, 0)[0] != 0xFEEDFACF:
-    sys.exit(f"{path} is not a 64-bit Mach-O object")
-count, size = struct.unpack_from("<2I", data, 16)
+src_path, no_bv_path, two_bv_path = sys.argv[1:4]
+with open(src_path, "rb") as stream:
+    orig = stream.read()
+if struct.unpack_from("<I", orig, 0)[0] != 0xFEEDFACF:
+    sys.exit(f"{src_path} is not a 64-bit Mach-O object")
+count, size = struct.unpack_from("<2I", orig, 16)
 offset = 32
-build_version = None
+bv_offset = None
+bv_size = 0
 for _ in range(count):
-    command, command_size = struct.unpack_from("<2I", data, offset)
+    command, command_size = struct.unpack_from("<2I", orig, offset)
     if command == LC_BUILD_VERSION:
-        build_version = bytes(data[offset:offset + command_size])
+        bv_offset = offset
+        bv_size = command_size
     offset += command_size
-if build_version is None:
-    sys.exit(f"{path} lacks LC_BUILD_VERSION")
+if bv_offset is None:
+    sys.exit(f"{src_path} lacks LC_BUILD_VERSION")
+build_version = orig[bv_offset:bv_offset + bv_size]
 end = 32 + size
+
+no_bv = bytearray(orig)
+del no_bv[bv_offset:bv_offset + bv_size]
+insert_at = end - bv_size
+no_bv[insert_at:insert_at] = b"\x00" * bv_size
+struct.pack_into("<2I", no_bv, 16, count - 1, size - bv_size)
+with open(no_bv_path, "wb") as stream:
+    stream.write(no_bv)
+
+two_bv = bytearray(orig)
 pad = len(build_version)
-if end + pad <= len(data) and not any(data[end:end + pad]):
-    data[end:end + pad] = build_version
+if end + pad <= len(two_bv) and not any(two_bv[end:end + pad]):
+    two_bv[end:end + pad] = build_version
 else:
     pos = 32
     for _ in range(count):
-        command, command_size = struct.unpack_from("<2I", data, pos)
+        command, command_size = struct.unpack_from("<2I", two_bv, pos)
         if command == LC_SEGMENT_64 and command_size >= 72:
-            shift_u64(data, pos + 40, end, pad)
-            nsects = struct.unpack_from("<I", data, pos + 64)[0]
+            shift_u64(two_bv, pos + 40, end, pad)
+            nsects = struct.unpack_from("<I", two_bv, pos + 64)[0]
             for sect_index in range(nsects):
                 sec = pos + 72 + sect_index * 80
                 if sec + 80 <= pos + command_size:
-                    shift_u32(data, sec + 48, end, pad)
-                    shift_u32(data, sec + 56, end, pad)
+                    shift_u32(two_bv, sec + 48, end, pad)
+                    shift_u32(two_bv, sec + 56, end, pad)
         elif command == LC_SYMTAB and command_size >= 24:
-            shift_u32(data, pos + 8, end, pad)
-            shift_u32(data, pos + 16, end, pad)
+            shift_u32(two_bv, pos + 8, end, pad)
+            shift_u32(two_bv, pos + 16, end, pad)
         elif command == LC_DYSYMTAB and command_size >= 80:
             for field in (32, 40, 48, 56, 64, 72):
-                shift_u32(data, pos + field, end, pad)
+                shift_u32(two_bv, pos + field, end, pad)
         elif command in LINKEDIT_DATA_CMDS and command_size >= 16:
-            shift_u32(data, pos + 8, end, pad)
+            shift_u32(two_bv, pos + 8, end, pad)
         pos += command_size
-    data[end:end] = build_version
-struct.pack_into("<2I", data, 16, count + 1, size + pad)
-with open(path, "wb") as stream:
-    stream.write(data)
+    two_bv[end:end] = build_version
+struct.pack_into("<2I", two_bv, 16, count + 1, size + pad)
+with open(two_bv_path, "wb") as stream:
+    stream.write(two_bv)
 EOF
-[ "$(otool -l "$MEMBERS/two-build-versions.o" |
+OTOOL_NO_BV="$(otool -l "$MEMBERS/no-build-version.o")"
+if printf '%s\n' "$OTOOL_NO_BV" | grep -q 'cmd LC_BUILD_VERSION$'; then
+	fail "the fixture member still carries a build-version command"
+fi
+OTOOL_TWO_BV="$(otool -l "$MEMBERS/two-build-versions.o")"
+[ "$(printf '%s\n' "$OTOOL_TWO_BV" |
 	grep -c 'cmd LC_BUILD_VERSION$')" -eq 2 ] ||
 	fail "the fixture member lacks a second build-version command"
 xcrun --sdk iphoneos clang -target arm64-apple-ios16.0 -flto \

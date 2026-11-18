@@ -24,6 +24,7 @@ env:
 
 permissions:
   contents: write
+  checks: write
 
 concurrency:
   group: build-deps-${{ github.ref }}
