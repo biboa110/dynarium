@@ -72,6 +72,12 @@ struct SerialConsoleSheet: View {
             }
             .navigationTitle("Serial Console")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                session.setConsoleSheetVisible(true)
+            }
+            .onDisappear {
+                session.setConsoleSheetVisible(false)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {

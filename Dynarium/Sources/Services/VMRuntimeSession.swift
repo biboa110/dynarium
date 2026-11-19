@@ -58,6 +58,72 @@ private nonisolated struct UncheckedViewBox: @unchecked Sendable {
     let view: GuestMetalView
 }
 
+private nonisolated final class ConsoleLogBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+    private var milestoneScratch = ""
+    private var dirty = false
+    private let limitBytes = 64 * 1024
+
+    func reset() {
+        lock.withLock {
+            text = ""
+            milestoneScratch = ""
+            dirty = false
+        }
+    }
+
+    func append(_ chunk: String) {
+        guard !chunk.isEmpty else { return }
+        lock.withLock {
+            text.append(chunk)
+            if text.utf8.count > limitBytes {
+                let trimStart = text.index(text.endIndex, offsetBy: -48_000, limitedBy: text.startIndex) ?? text.startIndex
+                text = String(text[trimStart...])
+            }
+            milestoneScratch.append(chunk)
+            if milestoneScratch.utf8.count > 16_384 {
+                let cut = milestoneScratch.index(milestoneScratch.endIndex, offsetBy: -8_192, limitedBy: milestoneScratch.startIndex) ?? milestoneScratch.startIndex
+                milestoneScratch = String(milestoneScratch[cut...])
+            }
+            dirty = true
+        }
+    }
+
+    func drain(needText: Bool, needMilestones: Bool) -> (lines: [String], partialLine: String, textSnapshot: String?) {
+        lock.withLock {
+            var lines: [String] = []
+            var partial = ""
+            if needMilestones {
+                while let newlineIdx = milestoneScratch.firstIndex(where: { $0 == "\n" || $0 == "\r" }) {
+                    let line = String(milestoneScratch[..<newlineIdx])
+                    milestoneScratch.removeSubrange(...newlineIdx)
+                    if !line.isEmpty { lines.append(line) }
+                }
+                if milestoneScratch.utf8.count > 4096 {
+                    milestoneScratch.removeAll(keepingCapacity: true)
+                } else {
+                    partial = milestoneScratch
+                }
+            } else if !milestoneScratch.isEmpty {
+                milestoneScratch.removeAll(keepingCapacity: false)
+            }
+            let snapshot: String? = (needText && dirty) ? text : nil
+            if snapshot != nil {
+                dirty = false
+            }
+            return (lines, partial, snapshot)
+        }
+    }
+
+    func snapshotAll() -> String {
+        lock.withLock {
+            dirty = false
+            return text
+        }
+    }
+}
+
 @MainActor
 final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     static let shared = VMRuntimeSession()
@@ -82,6 +148,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published private(set) var adbLanAddress: String?
     @Published var keyboardVisible: Bool = false
     @Published var errorBannerMessage: String?
+    @Published private(set) var processRequiresRestart: Bool = false
+    @Published private(set) var shutdownStatusDetail: String?
 
     var shouldShowBootOverlay: Bool {
         guard phase.isActive, bootStage != .ready, !bootOverlayDismissed else { return false }
@@ -99,20 +167,23 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private let vmStore = VirtualMachineStore.shared
     private let imageStore = SystemImageStore.shared
     private let runtimeQueue = DispatchQueue(label: "com.dynarium.runtime.lifecycle", qos: .userInitiated)
-    private let consoleLimitBytes = 64 * 1024
+    private let consoleBuffer = ConsoleLogBuffer()
 
     private var activeImage: SystemImageManifest?
     private var activeMetalView: GuestMetalView?
     private var initialGeometry: GuestDisplayGeometry?
     private var bootLaunchedForSession = false
     private var brandingAppliedForSession = false
-    private var consoleLineBuffer = ""
+    private var isConsoleSheetVisible = false
+    private var usedHardForceStop = false
     private var runtimeThread: Thread?
     private var thermalObserver: NSObjectProtocol?
     private var lastAppliedThrottleState: Bool?
     private var lastAppliedPageTrimState: Bool?
     private var statsTimer: Task<Void, Never>?
     private var spaceCheckTask: Task<Void, Never>?
+    private var consoleFlushTask: Task<Void, Never>?
+    private var brandingTask: Task<Void, Never>?
     private var spacePauser: SpacePauser?
     private var networkBridge: AdbNetworkBridge?
     private var micPermission = SystemMicrophonePermission()
@@ -149,8 +220,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         activeVM = vm
         activeImage = image
         telemetry = VMTelemetrySnapshot()
+        consoleBuffer.reset()
         consoleText = ""
-        consoleLineBuffer = ""
+        shutdownStatusDetail = nil
+        usedHardForceStop = false
         bootStage = .preparing
         bootStartedAt = Date()
         bootOverlayDismissed = false
@@ -206,17 +279,20 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         let timeZoneName = TimeZone.current.identifier
         let isUniversal = hardware.edition == .universalSoftware
 
-        // Configure display target refresh rate & Gallium software driver before selecting runtime.
+        // Configure display target refresh rate, preload policy & safe software driver before selecting runtime.
         let displayHz = min(max(vm.targetDisplayFPS, 60), hardware.maxDisplayRefreshRate)
         setenv("UML_DISPLAY_REFRESH_HZ", String(displayHz), 1)
+        setenv("DYNARIUM_RENDERER_PRELOAD", (vm.preloadRenderer && !isUniversal) ? "1" : "0", 1)
 
         if isUniversal {
-            let driver = hardware.resolvedGalliumDriver(
-                preference: vm.softwareBackend,
-                jitActive: hardware.debuggerAttached
-            )
-            setenv("GALLIUM_DRIVER", driver, 1)
-            setenv("DRAW_USE_LLVM", driver == "llvmpipe" ? "1" : "0", 1)
+            #if targetEnvironment(simulator)
+            let preDriver = "llvmpipe"
+            #else
+            // Keep physical devices on softpipe until prepare_jit confirms executable JIT pages.
+            let preDriver = HostHardwareProfile.resolveGalliumDriver(preference: vm.softwareBackend, jitActive: false)
+            #endif
+            setenv("GALLIUM_DRIVER", preDriver, 1)
+            setenv("DRAW_USE_LLVM", preDriver == "llvmpipe" ? "1" : "0", 1)
         }
 
         let selectRC = kernarium_runtime_loader_select(UInt32(KERNARIUM_RUNTIME_GUEST_ANDROID))
@@ -225,11 +301,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             return
         }
 
-        kernarium_runtime_loader_set_console_output_handler { [weak self] data in
+        let bufferRef = consoleBuffer
+        kernarium_runtime_loader_set_console_output_handler { data in
             let text = String(decoding: data, as: UTF8.self)
-            Task { @MainActor [weak self] in
-                self?.appendConsole(text)
-            }
+            bufferRef.append(text)
         }
 
         kernarium_runtime_loader_set_restart_handler { [weak self] rawEvent, restartCount in
@@ -300,14 +375,22 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 )
                 if jitStatus == KERNARIUM_RUNTIME_JIT_READY {
                     useJitFlag = 1
-                    if isUniversal {
-                        setenv("GALLIUM_DRIVER", "llvmpipe", 1)
-                        setenv("DRAW_USE_LLVM", "1", 1)
-                    }
                 }
             }
 
             let jitEnabledNow = (useJitFlag != 0)
+            if isUniversal {
+                #if targetEnvironment(simulator)
+                let finalDriver = "llvmpipe"
+                #else
+                let finalDriver = HostHardwareProfile.resolveGalliumDriver(
+                    preference: vm.softwareBackend,
+                    jitActive: jitEnabledNow
+                )
+                #endif
+                setenv("GALLIUM_DRIVER", finalDriver, 1)
+                setenv("DRAW_USE_LLVM", finalDriver == "llvmpipe" ? "1" : "0", 1)
+            }
             Task { @MainActor [weak self] in
                 self?.jitActiveInSession = jitEnabledNow
             }
@@ -397,6 +480,9 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
     private func runtimeDidExit(code: Int32, message: String?) {
         runtimeThread = nil
+        brandingTask?.cancel()
+        brandingTask = nil
+        shutdownStatusDetail = nil
         UIApplication.shared.isIdleTimerDisabled = false
         if let thermalObserver {
             NotificationCenter.default.removeObserver(thermalObserver)
@@ -418,21 +504,116 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         kernarium_runtime_loader_set_console_output_handler(nil)
         kernarium_runtime_loader_set_restart_handler(nil)
 
+        flushConsoleBuffer(forceText: true)
+        hardware.refreshDynamicMetrics()
+
+        var errorBuffer = [CChar](repeating: 0, count: 1024)
+        _ = kernarium_runtime_loader_copy_last_error(&errorBuffer, errorBuffer.count)
+        let runtimeDetail = String(cString: errorBuffer).trimmingCharacters(in: .whitespacesAndNewlines)
+
         let name = activeVM?.name ?? "Android"
         if let message {
             phase = .ended(vmName: name, exitCode: code, note: message)
-        } else if code == 0 {
-            phase = .ended(vmName: name, exitCode: 0, note: "Máy ảo đã tắt nguồn an toàn.")
-        } else if code == Int32(KERNARIUM_RUNTIME_RESULT_RESTART_LOOP) {
-            phase = .ended(vmName: name, exitCode: code, note: "Android khởi động lại liên tục 5 lần nên hypervisor đã dừng bảo vệ.")
-        } else {
-            let recordSummary = activeVM.flatMap { vmStore.lastSessionSummary(for: $0.id) }
-            phase = .ended(vmName: name, exitCode: code, note: recordSummary ?? "Phiên máy ảo kết thúc (mã \(code)).")
+            return
         }
+
+        if code == 0 {
+            processRequiresRestart = false
+            phase = .ended(
+                vmName: name,
+                exitCode: 0,
+                note: "Máy ảo đã tắt nguồn an toàn. Bạn có thể khởi động lại ngay."
+            )
+            return
+        }
+
+        if code == Int32(KERNARIUM_RUNTIME_RESULT_RESTART_LOOP) {
+            phase = .ended(
+                vmName: name,
+                exitCode: code,
+                note: "Android khởi động lại liên tục 5 lần nên hypervisor đã dừng bảo vệ."
+            )
+            return
+        }
+
+        if code == -3 {
+            processRequiresRestart = true
+            let detailSuffix = runtimeDetail.isEmpty ? "" : "\n\nChi tiết: \(runtimeDetail)"
+            phase = .ended(
+                vmName: name,
+                exitCode: code,
+                note: "Phiên trước chưa giải phóng hết bộ nhớ nhân Linux trong tiến trình iOS (mã -3). Hãy vuốt đóng hoàn toàn ứng dụng Dynarium trong trình đa nhiệm rồi mở lại.\(detailSuffix)"
+            )
+            return
+        }
+
+        if code == -4 {
+            if usedHardForceStop {
+                processRequiresRestart = true
+                phase = .ended(
+                    vmName: name,
+                    exitCode: code,
+                    note: "Đã ép dừng khẩn cấp máy ảo. Hãy vuốt đóng và mở lại ứng dụng Dynarium trước khi bật máy ảo mới để đảm bảo vùng nhớ nhân sạch."
+                )
+                return
+            }
+            if !hardware.hasExtendedVirtualAddressing {
+                phase = .ended(
+                    vmName: name,
+                    exitCode: code,
+                    note: "Thiết bị chưa được cấp không gian địa chỉ 64 GiB (Extended Virtual Addressing) khi ký ứng dụng nên không thể khởi tạo vùng nhớ nhân Linux (mã -4). Trên iOS 16 hãy cài IPA qua TrollStore hoặc chứng chỉ giữ nguyên entitlements."
+                )
+                return
+            }
+            if !runtimeDetail.isEmpty {
+                phase = .ended(vmName: name, exitCode: code, note: "\(runtimeDetail) (mã -4).")
+                return
+            }
+            let recordSummary = activeVM.flatMap { vmStore.lastSessionSummary(for: $0.id) }
+            phase = .ended(
+                vmName: name,
+                exitCode: code,
+                note: recordSummary ?? "Hypervisor không thể khởi tạo máy ảo trên thiết bị này (mã -4). Mở Console để xem chi tiết."
+            )
+            return
+        }
+
+        if code == -2 {
+            phase = .ended(
+                vmName: name,
+                exitCode: code,
+                note: "Không đủ bộ nhớ khả dụng (Out of Memory, mã -2). Hãy giảm RAM máy ảo trong cấu hình."
+            )
+            return
+        }
+
+        if code == -1 {
+            let note = runtimeDetail.isEmpty
+                ? "Tham số khởi chạy máy ảo không hợp lệ (mã -1)."
+                : "\(runtimeDetail) (mã -1)."
+            phase = .ended(vmName: name, exitCode: code, note: note)
+            return
+        }
+
+        if code == 126 {
+            phase = .ended(
+                vmName: name,
+                exitCode: code,
+                note: "Không thể nạp nhân Linux nhúng (__TEXT,__uml_elf, mã 126). Hãy mở Console hoặc cài đặt lại gói IPA."
+            )
+            return
+        }
+
+        let recordSummary = activeVM.flatMap { vmStore.lastSessionSummary(for: $0.id) }
+        let fallbackNote = !runtimeDetail.isEmpty
+            ? "\(runtimeDetail) (mã \(code))."
+            : (recordSummary ?? "Phiên máy ảo kết thúc (mã \(code)).")
+        phase = .ended(vmName: name, exitCode: code, note: fallbackNote)
     }
 
     func dismissEndedSession() {
         guard !phase.isActive else { return }
+        shutdownStatusDetail = nil
         phase = .idle
         activeVM = nil
         activeImage = nil
@@ -444,27 +625,72 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     func requestCleanShutdown() {
         guard let vm = activeVM, phase.isActive else { return }
         phase = .stopping(vmName: vm.name)
-        Task.detached(priority: .userInitiated) { [adbClock] in
+        shutdownStatusDetail = "Đang gửi lệnh tắt nguồn an toàn tới Android (reboot -p)\u{2026}"
+        Task.detached(priority: .userInitiated) { [weak self, adbClock] in
+            var adbSent = false
             if let identity = try? AdbKeyStore.forVM(vm.id).loadOrCreate() {
-                let session = AdbSession(signer: identity.signer, clock: adbClock, connectLimit: 5)
-                _ = try? session.run { conn in
+                let session = AdbSession(signer: identity.signer, clock: adbClock, connectLimit: 3)
+                adbSent = (try? session.run { conn in
                     _ = try conn.runShell("reboot -p")
-                }
+                }) != nil
             }
-            // Wait up to 8 seconds for clean Android poweroff before issuing host sync+stop.
-            try? await Task.sleep(for: .seconds(8))
+            // Wait up to 20s if Android received `reboot -p`, or 3s if ADB wasn't reachable yet.
+            let maxTicks = adbSent ? 80 : 12
+            for _ in 0..<maxTicks {
+                let stillStopping = await MainActor.run { [weak self] () -> Bool in
+                    guard let self, case .stopping = self.phase else { return false }
+                    return true
+                }
+                if !stillStopping { return }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
             await MainActor.run { [weak self] in
                 guard let self, case .stopping = self.phase else { return }
-                self.forceStop()
+                self.shutdownStatusDetail = "Android chưa tự tắt — đang dừng sạch ở tầng nhân Linux\u{2026}"
             }
+            await self?.performCleanKernelHalt()
+        }
+    }
+
+    func requestQuickSafeStop() {
+        guard let vm = activeVM, phase.isActive else { return }
+        phase = .stopping(vmName: vm.name)
+        shutdownStatusDetail = "Đang đồng bộ ổ đĩa và dừng sạch nhân Linux\u{2026}"
+        Task.detached(priority: .userInitiated) { [weak self] in
+            await self?.performCleanKernelHalt()
+        }
+    }
+
+    private func performCleanKernelHalt() async {
+        let haltRC: Int32 = await withCheckedContinuation { continuation in
+            runtimeQueue.async {
+                _ = kernarium_runtime_loader_sync()
+                let rc = kernarium_runtime_loader_request_halt()
+                continuation.resume(returning: rc)
+            }
+        }
+        let ticks = (haltRC == 0 || haltRC == -4) ? 25 : 8
+        for _ in 0..<ticks {
+            let stillStopping = await MainActor.run { [weak self] () -> Bool in
+                guard let self, case .stopping = self.phase else { return false }
+                return true
+            }
+            if !stillStopping { return }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        await MainActor.run { [weak self] in
+            guard let self, case .stopping = self.phase else { return }
+            self.forceStop()
         }
     }
 
     func forceStop() {
         guard phase.isActive else { return }
+        usedHardForceStop = true
         if let name = activeVM?.name {
             phase = .stopping(vmName: name)
         }
+        shutdownStatusDetail = "Đang ép dừng khẩn cấp máy ảo\u{2026}"
         runtimeQueue.async {
             _ = kernarium_runtime_loader_sync()
             kernarium_runtime_loader_request_stop()
@@ -486,7 +712,15 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         }
     }
 
+    func setConsoleSheetVisible(_ visible: Bool) {
+        isConsoleSheetVisible = visible
+        if visible {
+            flushConsoleBuffer(forceText: true)
+        }
+    }
+
     func clearConsole() {
+        consoleBuffer.reset()
         consoleText = ""
     }
 
@@ -652,6 +886,14 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 try? await Task.sleep(for: delay)
             }
         }
+
+        consoleFlushTask?.cancel()
+        consoleFlushTask = Task { [weak self] in
+            while let self, !Task.isCancelled, self.phase.isActive {
+                self.flushConsoleBuffer(forceText: false)
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
     }
 
     private func stopMonitoringLoops() {
@@ -659,6 +901,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         statsTimer = nil
         spaceCheckTask?.cancel()
         spaceCheckTask = nil
+        consoleFlushTask?.cancel()
+        consoleFlushTask = nil
     }
 
     private func pollStatistics() {
@@ -771,25 +1015,23 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
     // MARK: - Console Buffer
 
-    private func appendConsole(_ text: String) {
-        guard !text.isEmpty else { return }
-        consoleText.append(text)
-        if consoleText.utf8.count > consoleLimitBytes {
-            let trimStart = consoleText.index(consoleText.endIndex, offsetBy: -48_000, limitedBy: consoleText.startIndex) ?? consoleText.startIndex
-            consoleText = String(consoleText[trimStart...])
+    private func flushConsoleBuffer(forceText: Bool) {
+        let needMilestones = bootStage < .ready
+        let drained = consoleBuffer.drain(
+            needText: forceText || isConsoleSheetVisible,
+            needMilestones: needMilestones
+        )
+        if let snapshot = drained.textSnapshot {
+            consoleText = snapshot
+        } else if forceText {
+            consoleText = consoleBuffer.snapshotAll()
         }
-
-        guard bootStage < .ready else { return }
-        consoleLineBuffer.append(text)
-        while let newlineIdx = consoleLineBuffer.firstIndex(where: { $0 == "\n" || $0 == "\r" }) {
-            let line = String(consoleLineBuffer[..<newlineIdx])
-            consoleLineBuffer.removeSubrange(...newlineIdx)
+        guard needMilestones else { return }
+        for line in drained.lines {
             scanBootMilestone(in: line)
         }
-        if consoleLineBuffer.utf8.count > 4096 {
-            consoleLineBuffer.removeAll(keepingCapacity: true)
-        } else if !consoleLineBuffer.isEmpty {
-            scanBootMilestone(in: consoleLineBuffer)
+        if !drained.partialLine.isEmpty {
+            scanBootMilestone(in: drained.partialLine)
         }
     }
 
@@ -816,17 +1058,21 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     }
 
     private func applyDynariumGuestBrandingIfNeeded() {
-        guard !brandingAppliedForSession, let vmID = activeVM?.id else { return }
+        guard !brandingAppliedForSession, let vm = activeVM else { return }
         brandingAppliedForSession = true
+        let vmID = vm.id
+        let fastUiMode = vm.fastUiMode
+        let animScale = fastUiMode ? "0.5" : "1.0"
         let clock = adbClock
-        Task.detached(priority: .utility) {
+        brandingTask?.cancel()
+        brandingTask = Task.detached(priority: .utility) {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
             if let identity = try? AdbKeyStore.forVM(vmID).loadOrCreate() {
                 let session = AdbSession(signer: identity.signer, clock: clock, connectLimit: 8)
                 _ = try? session.run { conn in
                     _ = try conn.runShell(
-                        "settings put global device_name Dynarium && settings put secure bluetooth_name Dynarium && settings put global device_provisioned 1 && settings put secure user_setup_complete 1"
+                        "settings put global device_name Dynarium && settings put secure bluetooth_name Dynarium && settings put global device_provisioned 1 && settings put secure user_setup_complete 1 && settings put global window_animation_scale \(animScale) && settings put global transition_animation_scale \(animScale) && settings put global animator_duration_scale \(animScale)"
                     )
                 }
             }

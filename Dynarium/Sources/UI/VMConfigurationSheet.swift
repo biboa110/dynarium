@@ -50,27 +50,38 @@ struct VMConfigurationSheet: View {
                             let maxAllowed = max(minRAM, hardware.maximumMemoryMiB(vcpus: targetVCPUs))
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = min(max(min(safeRAM, 896), minRAM), maxAllowed)
+                            config.displayQuality = .economy
                             config.retinaDisplay = false
                             config.targetDisplayFPS = 60
                             config.thermalSaverEnabled = true
+                            config.fastUiMode = true
+                            config.preloadRenderer = false
                         }
                         PresetPillButton(title: "Khuyên dùng", icon: "checkmark.shield") {
                             let targetVCPUs = hardware.defaultVCPUs()
+                            let quality = hardware.defaultDisplayQuality()
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: targetVCPUs)
-                            config.retinaDisplay = hardware.defaultRetinaDisplay()
+                            config.displayQuality = quality
+                            config.retinaDisplay = (quality == .retina)
                             config.targetDisplayFPS = 60
                             config.thermalSaverEnabled = false
+                            config.fastUiMode = true
+                            config.preloadRenderer = hardware.defaultPreloadRenderer()
                         }
                         PresetPillButton(title: "Hiệu năng", icon: "speedometer") {
                             let targetVCPUs = min(max(2, hardware.maxVCPUs / 2), hardware.maxVCPUs)
                             let maxAllowed = max(minRAM, hardware.maximumMemoryMiB(vcpus: targetVCPUs))
                             let perfRAM = min(max(hardware.conservativeMemoryMiB(vcpus: targetVCPUs), hardware.safeRecommendedMemoryMiB(for: targetVCPUs)), maxAllowed)
+                            let perfQuality: VMDisplayQuality = (hardware.edition == .metal4Vulkan) ? .retina : .balanced
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = perfRAM
-                            config.retinaDisplay = (hardware.edition == .metal4Vulkan)
+                            config.displayQuality = perfQuality
+                            config.retinaDisplay = (perfQuality == .retina)
                             config.targetDisplayFPS = hardware.maxDisplayRefreshRate >= 120 ? 120 : 60
                             config.thermalSaverEnabled = false
+                            config.fastUiMode = true
+                            config.preloadRenderer = (hardware.edition == .metal4Vulkan)
                         }
                     }
                     .padding(.vertical, 2)
@@ -148,13 +159,28 @@ struct VMConfigurationSheet: View {
                         }
                     }
 
-                    Toggle("Màn hình Retina sắc nét", isOn: $config.retinaDisplay)
-                    if config.retinaDisplay && hardware.edition == .universalSoftware {
+                    Picker("Chất lượng hiển thị", selection: Binding(
+                        get: { config.displayQuality },
+                        set: { nextQuality in
+                            config.displayQuality = nextQuality
+                            config.retinaDisplay = (nextQuality == .retina)
+                        }
+                    )) {
+                        ForEach(VMDisplayQuality.allCases) { quality in
+                            Text(quality.displayName).tag(quality)
+                        }
+                    }
+                    if config.displayQuality == .economy {
+                        Text("Nhanh (720p): giảm gấp nhiều lần số điểm ảnh cần dựng hình, giúp Android mượt hơn và mát máy hơn rõ rệt.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if config.displayQuality == .retina && hardware.edition == .universalSoftware {
                         Text("Lưu ý: Dựng hình CPU trên bản Universal ở chế độ Retina tốn gấp 9 lần điểm ảnh và RAM, dễ gây chậm hoặc bị iOS đóng tiến trình.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
                     Toggle("Tự khớp kích thước màn hình", isOn: $config.autoResizeDisplay)
+                    Toggle("Tăng tốc giao diện Android (0.5× hoạt ảnh)", isOn: $config.fastUiMode)
 
                     if hardware.edition == .universalSoftware {
                         Picker("Bộ dựng hình CPU", selection: $config.softwareBackend) {
@@ -167,6 +193,7 @@ struct VMConfigurationSheet: View {
                             Text("KosmicKrisp + Zink (Metal 4)")
                                 .foregroundStyle(.secondary)
                         }
+                        Toggle("Tải trước đồ họa ứng dụng (mở app nhanh hơn)", isOn: $config.preloadRenderer)
                     }
 
                     VStack(alignment: .leading, spacing: 4) {

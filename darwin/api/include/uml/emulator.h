@@ -248,6 +248,11 @@ void uml_emulator_resume(struct uml_emulator *emulator);
  * the guest then receives once. It may wait for the guest's console, so call
  * it away from a user interface thread. */
 void uml_emulator_wake(struct uml_emulator *emulator);
+/* Asks the running guest kernel to sync its filesystems and execute a clean
+ * halt through its management console so its run ends with
+ * UML_EMULATOR_RUN_END_POWER_OFF and uml_emulator_release_guest can reclaim
+ * guest memory. May wait on the console, so call away from a UI thread. */
+int uml_emulator_halt_guest(struct uml_emulator *emulator);
 /* Every guest disk is a host file the host caches as well, so the guest's
  * page cache mostly holds memory twice, and only the guest's copy counts
  * against this process. A trimming guest hands its cold page cache to the

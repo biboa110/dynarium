@@ -15,6 +15,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
     @Binding var keyboardVisible: Bool
     let retinaMode: Bool
     var targetDisplayFPS: Int = 60
+    var maxLongEdgePixels: CGFloat = 0
     /// Told each time touches begin on the display, after their contacts have
     /// gone to the guest. An application that draws controls over the display
     /// uses it to put them away when a touch lands on the guest instead.
@@ -29,6 +30,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         view.viewDidLayout = viewDidLayout
         view.touchDidBegin = touchDidBegin
         view.retinaMode = retinaMode
+        view.maxLongEdgePixels = maxLongEdgePixels
         view.preferredFramesPerSecond = max(60, targetDisplayFPS)
         view.isPaused = true
         view.enableSetNeedsDisplay = true
@@ -44,6 +46,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         let view = controller.metalView
         view.touchDidBegin = touchDidBegin
         view.retinaMode = retinaMode
+        view.maxLongEdgePixels = maxLongEdgePixels
         view.preferredFramesPerSecond = max(60, targetDisplayFPS)
         view.setKeyboardVisible(keyboardVisible)
         view.reportLayout()
@@ -140,6 +143,7 @@ final class GuestMetalView: MTKView, UIKeyInput {
     ) -> Void)?
     var touchDidBegin: (@MainActor () -> Void)?
     var retinaMode = false
+    var maxLongEdgePixels: CGFloat = 0
     @objc private(set) var umlGuestResizeInProgress = false
     private var touchContacts = GuestTouchContacts<ObjectIdentifier>()
     private var guestContentSize: CGSize?
@@ -163,9 +167,17 @@ final class GuestMetalView: MTKView, UIKeyInput {
 
     func reportLayout() {
         guard let screen = window?.screen else { return }
-        let scale = retinaMode ? screen.nativeScale : 1
-        guard bounds.width > 0, bounds.height > 0,
-              scale.isFinite, scale > 0 else { return }
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let scale: CGFloat
+        if retinaMode {
+            scale = screen.nativeScale
+        } else if maxLongEdgePixels > 0 {
+            let longEdge = max(bounds.width, bounds.height)
+            scale = longEdge > 0 ? min(1, maxLongEdgePixels / longEdge) : 1
+        } else {
+            scale = 1
+        }
+        guard scale.isFinite, scale > 0 else { return }
         // SwiftUI supplies safe-area-excluded point bounds. Point-resolution
         // mode maps them directly to guest pixels; Retina mode converts them
         // to physical backing pixels, including fractional native scales.
@@ -175,8 +187,9 @@ final class GuestMetalView: MTKView, UIKeyInput {
         )
         guard pixelSize.width >= 1, pixelSize.height >= 1 else { return }
         drawableSize = pixelSize
-        let dotsPerInch = UInt32(
-            (CGFloat(160) * scale).rounded()
+        let dotsPerInch = max(
+            120,
+            UInt32((CGFloat(160) * scale).rounded())
         )
         viewDidLayout?(
             self,

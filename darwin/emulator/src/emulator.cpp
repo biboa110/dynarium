@@ -715,6 +715,16 @@ public:
 			(void)::uml::device::wake_guest();
 	}
 
+	[[nodiscard]] int halt_guest() noexcept
+	{
+		if (::uml::runtime::current_context() != &runtime_)
+			return -UML_EMULATOR_UNSUPPORTED;
+		resume();
+		(void)::uml::device::request_guest_writeback(500U);
+		(void)::uml::runtime::sync_guest_files();
+		return guest_request_result(::uml::device::halt_guest());
+	}
+
 	[[nodiscard]] ::uml::runtime::ExecutionEngine
 	execution_engine() const noexcept
 	{
@@ -1274,6 +1284,13 @@ extern "C" void uml_emulator_wake(uml_emulator *emulator)
 {
 	if (emulator != nullptr)
 		emulator->implementation.wake();
+}
+
+extern "C" int uml_emulator_halt_guest(uml_emulator *emulator)
+{
+	if (emulator == nullptr)
+		return -UML_EMULATOR_INVALID_ARGUMENT;
+	return emulator->implementation.halt_guest();
 }
 
 extern "C" int uml_emulator_set_page_cache_trimming(uml_emulator *emulator,

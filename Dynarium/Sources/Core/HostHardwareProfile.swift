@@ -97,6 +97,7 @@ final class HostHardwareProfile: ObservableObject {
     let maxVCPUs: Int
     let guestMemoryCeilingMiB: Int
     let maxDisplayRefreshRate: Int
+    let hasExtendedVirtualAddressing: Bool
     let edition: DynariumEdition
     let appVersionString: String
     let buildNumberString: String
@@ -125,13 +126,9 @@ final class HostHardwareProfile: ObservableObject {
         setenv("GALLIUM_DRIVER", "llvmpipe", 1)
         setenv("DRAW_USE_LLVM", "1", 1)
         #else
-        if kernarium_runtime_loader_debugger_attached() != 0 {
-            setenv("GALLIUM_DRIVER", "llvmpipe", 1)
-            setenv("DRAW_USE_LLVM", "1", 1)
-        } else {
-            setenv("GALLIUM_DRIVER", "softpipe", 1)
-            setenv("DRAW_USE_LLVM", "0", 1)
-        }
+        // Keep physical iOS devices on softpipe at app startup until prepare_jit confirms executable JIT pages.
+        setenv("GALLIUM_DRIVER", "softpipe", 1)
+        setenv("DRAW_USE_LLVM", "0", 1)
         #endif
     }
 
@@ -166,6 +163,7 @@ final class HostHardwareProfile: ObservableObject {
         self.maxVCPUs = max(1, GuestProcessorLimit.vCPUs(physicalProcessorCount: cores))
         self.guestMemoryCeilingMiB = max(512, Int(kernarium_runtime_loader_guest_memory_ceiling_mib()))
         self.maxDisplayRefreshRate = max(60, UIScreen.main.maximumFramesPerSecond)
+        self.hasExtendedVirtualAddressing = isMac || dynarium_probe_extended_va_space()
 
         if let frameworksURL = Bundle.main.privateFrameworksURL,
            FileManager.default.fileExists(
@@ -284,18 +282,36 @@ final class HostHardwareProfile: ObservableObject {
         )
     }
 
-    func defaultRetinaDisplay() -> Bool {
-        guard edition == .metal4Vulkan else {
-            // CPU software rasterization uses ~9x more RAM & CPU at 3x Retina scale.
-            return false
-        }
+    func defaultDisplayQuality() -> VMDisplayQuality {
         let limitMiB = effectiveMemoryLimitMiB
-        return limitMiB == 0 || limitMiB >= 3200
+        if edition == .metal4Vulkan {
+            return (limitMiB == 0 || limitMiB >= 3200) ? .retina : .balanced
+        }
+        if limitMiB > 0 && limitMiB < 2600 {
+            return .economy
+        }
+        return .balanced
+    }
+
+    func defaultRetinaDisplay() -> Bool {
+        defaultDisplayQuality() == .retina
+    }
+
+    func defaultPreloadRenderer() -> Bool {
+        guard edition == .metal4Vulkan else { return false }
+        let limitMiB = effectiveMemoryLimitMiB
+        return limitMiB == 0 || limitMiB >= 2800
     }
 
     func defaultVCPUs() -> Int {
         let limitMiB = effectiveMemoryLimitMiB
-        if edition == .universalSoftware || (limitMiB > 0 && limitMiB < 3000) {
+        if limitMiB == 0 || limitMiB >= 3800 {
+            return min(max(3, maxVCPUs / 2), min(4, maxVCPUs))
+        }
+        if edition == .universalSoftware && limitMiB < 3500 {
+            return min(2, maxVCPUs)
+        }
+        if limitMiB < 3000 {
             return min(2, maxVCPUs)
         }
         return min(max(2, maxVCPUs / 2), maxVCPUs)
@@ -348,9 +364,15 @@ final class HostHardwareProfile: ObservableObject {
 
         let baseOverhead = edition == .universalSoftware ? 420 : 280
         let vcpuOverhead = vm.vcpuCount * 80
-        let displayOverhead = vm.retinaDisplay
-            ? (edition == .universalSoftware ? 320 : 140)
-            : 120
+        let displayOverhead: Int
+        switch vm.displayQuality {
+        case .retina:
+            displayOverhead = (edition == .universalSoftware ? 320 : 140)
+        case .balanced:
+            displayOverhead = 120
+        case .economy:
+            displayOverhead = 64
+        }
         let estimatedTotalMiB = vm.guestMemoryMiB + baseOverhead + vcpuOverhead + displayOverhead
         let safeCeilingMiB = max(768, limitMiB - 300)
         let riskyRetinaOnLowLimit = edition == .universalSoftware && vm.retinaDisplay && limitMiB < 3200
@@ -359,7 +381,7 @@ final class HostHardwareProfile: ObservableObject {
 
         if estimatedTotalMiB > safeCeilingMiB || budget.shortOfFloor || riskyRetinaOnLowLimit || exceedsUniversalSafeTarget {
             let retinaNote = vm.retinaDisplay ? ", Retina" : ""
-            let reason = "Cấu hình hiện tại (\(vm.vcpuCount) vCPU, \(Formats.size(mib: vm.guestMemoryMiB))\(retinaNote)) dễ chạm trần RAM \(Formats.size(mib: limitMiB)) trên thiết bị này. Đề xuất hạ về \(suggestedVCPUs) vCPU, \(Formats.size(mib: suggestedMemoryMiB)) và tắt Retina để chạy ổn định."
+            let reason = "Cấu hình hiện tại (\(vm.vcpuCount) vCPU, \(Formats.size(mib: vm.guestMemoryMiB))\(retinaNote)) dễ chạm trần RAM \(Formats.size(mib: limitMiB)) trên thiết bị này. Đề xuất điều chỉnh về \(suggestedVCPUs) vCPU, \(Formats.size(mib: suggestedMemoryMiB)) để chạy ổn định."
             return LaunchSafetyAssessment(
                 needsOptimization: true,
                 suggestedVCPUs: suggestedVCPUs,
@@ -378,7 +400,7 @@ final class HostHardwareProfile: ObservableObject {
         )
     }
 
-    func resolvedGalliumDriver(preference: PreferredSoftwareBackend, jitActive: Bool) -> String {
+    nonisolated static func resolveGalliumDriver(preference: PreferredSoftwareBackend, jitActive: Bool) -> String {
         switch preference {
         case .softpipe:
             return "softpipe"
@@ -388,8 +410,12 @@ final class HostHardwareProfile: ObservableObject {
             #if targetEnvironment(simulator)
             return "llvmpipe"
             #else
-            return (jitActive || debuggerAttached) ? "llvmpipe" : "softpipe"
+            return jitActive ? "llvmpipe" : "softpipe"
             #endif
         }
+    }
+
+    func resolvedGalliumDriver(preference: PreferredSoftwareBackend, jitActive: Bool) -> String {
+        Self.resolveGalliumDriver(preference: preference, jitActive: jitActive)
     }
 }

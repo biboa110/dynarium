@@ -476,6 +476,23 @@ struct Answer final {
 #endif
 }
 
+/* Whether XNU already granted CS_DEBUGGED with CS_KILL cleared (for example
+ * via TrollStore's Enable JIT toggle or direct developer debugging). */
+[[nodiscard]] bool cs_debugged() noexcept
+{
+#if UML_JIT_MEMORY_REGION_TEST
+	return false;
+#else
+	constexpr unsigned status_operation = 0;
+	constexpr std::uint32_t debugged_flag = 0x10000000U;
+	constexpr std::uint32_t kill_flag = 0x00000200U;
+	std::uint32_t flags = 0;
+	if (csops(getpid(), status_operation, &flags, sizeof flags) != 0)
+		return false;
+	return (flags & debugged_flag) != 0 && (flags & kill_flag) == 0;
+#endif
+}
+
 sigjmp_buf fault_jump;
 
 void on_fault(int, siginfo_t *, void *)
@@ -543,7 +560,9 @@ public:
 						      : RegionStatus::smaller;
 		if (spent_)
 			return RegionStatus::failed;
-		if (!traced())
+		const bool debugger_present = traced();
+		const bool direct_debugged = !debugger_present && cs_debugged();
+		if (!debugger_present && !direct_debugged)
 			return RegionStatus::no_debugger;
 		const auto size = granules * region_granule;
 		std::byte *executable = nullptr;
@@ -552,48 +571,59 @@ public:
 			note("the region could not be mapped");
 			return RegionStatus::failed;
 		}
-		const auto prepared = ask_debugger(
-			1, reinterpret_cast<std::uintptr_t>(executable), size);
-		if (prepared == Reply::no_debugger) {
-			/* The debugger was gone before it served the request, so
-			 * nothing can still write into the region, and this process
-			 * has not involved one: it can try again. */
-			note("the debugger left before it prepared the region");
-			give_back(executable, writable, size);
-			return RegionStatus::no_debugger;
-		}
-		/* From a request the debugger is involved: whatever happens, this
-		 * process does not try again. */
-		spent_ = true;
-		if (prepared != Reply::answered) {
-			/* A debugger that answers late still writes into the
-			 * region, so it stays mapped. */
-			note("the debugger did not prepare the region");
-			return RegionStatus::failed;
-		}
-		/* Detach next: the guest must not run under the debugger. A
-		 * debugger that does not answer this either is left as it is; one
-		 * that is gone has detached, and the pages it blessed before it
-		 * went are proved below. */
-		const auto detached = ask_debugger(0, 0, 0);
-		if (detached != Reply::answered && detached != Reply::no_debugger) {
-			note("the debugger did not detach");
-			return RegionStatus::failed;
-		}
-		if (mlock(writable, size) != 0) {
-			note("the region could not be wired", true);
-			give_back(executable, writable, size);
-			return RegionStatus::failed;
-		}
-		if (!kill_cleared()) {
-			note("the process still dies on a bad page");
-			give_back(executable, writable, size);
-			return RegionStatus::failed;
-		}
-		if (!check(executable, writable, size)) {
-			note("the prepared pages did not run code");
-			give_back(executable, writable, size);
-			return RegionStatus::failed;
+		if (debugger_present) {
+			const auto prepared = ask_debugger(
+				1, reinterpret_cast<std::uintptr_t>(executable), size);
+			if (prepared == Reply::no_debugger) {
+				/* The debugger was gone before it served the request, so
+				 * nothing can still write into the region, and this process
+				 * has not involved one: it can try again. */
+				note("the debugger left before it prepared the region");
+				give_back(executable, writable, size);
+				return RegionStatus::no_debugger;
+			}
+			/* From a request the debugger is involved: whatever happens, this
+			 * process does not try again. */
+			spent_ = true;
+			if (prepared != Reply::answered) {
+				/* A debugger that answers late still writes into the
+				 * region, so it stays mapped. */
+				note("the debugger did not prepare the region");
+				return RegionStatus::failed;
+			}
+			/* Detach next: the guest must not run under the debugger. A
+			 * debugger that does not answer this either is left as it is; one
+			 * that is gone has detached, and the pages it blessed before it
+			 * went are proved below. */
+			const auto detached = ask_debugger(0, 0, 0);
+			if (detached != Reply::answered && detached != Reply::no_debugger) {
+				note("the debugger did not detach");
+				return RegionStatus::failed;
+			}
+			if (mlock(writable, size) != 0) {
+				note("the region could not be wired", true);
+				give_back(executable, writable, size);
+				return RegionStatus::failed;
+			}
+			if (!kill_cleared()) {
+				note("the process still dies on a bad page");
+				give_back(executable, writable, size);
+				return RegionStatus::failed;
+			}
+			if (!check(executable, writable, size)) {
+				note("the prepared pages did not run code");
+				give_back(executable, writable, size);
+				return RegionStatus::failed;
+			}
+		} else {
+			/* CS_DEBUGGED without a ptrace debugger (e.g. TrollStore JIT):
+			 * verify pages can execute through the RX alias, and keep
+			 * StikDebug attachable if the host denies direct execution. */
+			if (!kill_cleared() || !check(executable, writable, size)) {
+				note("CS_DEBUGGED pages did not run code");
+				give_back(executable, writable, size);
+				return RegionStatus::no_debugger;
+			}
 		}
 		base_ = executable;
 		delta_ = writable - executable;
@@ -863,7 +893,7 @@ bool debugger_route() noexcept
 bool debugger_attached() noexcept
 {
 #if UML_JIT_MEMORY_REGION_ROUTE
-	return traced();
+	return traced() || cs_debugged();
 #else
 	return false;
 #endif

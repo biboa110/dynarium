@@ -17,7 +17,13 @@
 #include <signal.h>
 #include <sys/proc.h>
 #include <sys/sysctl.h>
+#include <TargetConditionals.h>
 #include <unistd.h>
+
+#if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
+extern "C" int csops(pid_t pid, unsigned int operation, void* buffer,
+    std::size_t size);
+#endif
 
 namespace {
 
@@ -31,6 +37,8 @@ bool selectionAttempted;
 int (*automationJobAtStart)(void);
 int (*automationHoldDelayMs)(void);
 #endif
+int (*runtimeRequestHaltFn)(void);
+std::size_t (*runtimeCopyLastErrorFn)(char*, std::size_t);
 /* The runtime relay can still call into the loader while exit() destroys
  * ordinary statics. Keep its lock and retained handler alive together. */
 struct ConsoleOutputHandlerState final {
@@ -301,6 +309,12 @@ __attribute__((constructor)) void isolateGuestTimerFromApplicationThreads()
         dlsym(handle, "kernarium_runtime_automation_hold_delay_ms"));
     (void)dlerror();
 #endif
+    runtimeRequestHaltFn = reinterpret_cast<int (*)(void)>(
+        dlsym(handle, "kernarium_runtime_request_halt"));
+    (void)dlerror();
+    runtimeCopyLastErrorFn = reinterpret_cast<std::size_t (*)(char*, std::size_t)>(
+        dlsym(handle, "kernarium_runtime_copy_last_error"));
+    (void)dlerror();
     selectedFlavor = guestFlavor;
     selectedApi.store(api, std::memory_order_release);
     std::printf(
@@ -353,6 +367,25 @@ extern "C" void kernarium_runtime_loader_request_stop(void)
     const kernarium_runtime_api* runtime = api();
     if (runtime != nullptr)
         runtime->request_stop();
+}
+
+extern "C" int kernarium_runtime_loader_request_halt(void)
+{
+    if (runtimeRequestHaltFn == nullptr)
+        return -ENOTSUP;
+    return runtimeRequestHaltFn();
+}
+
+extern "C" size_t kernarium_runtime_loader_copy_last_error(
+    char* buffer,
+    size_t capacity)
+{
+    if (runtimeCopyLastErrorFn == nullptr) {
+        if (buffer != nullptr && capacity != 0U)
+            buffer[0] = '\0';
+        return 0U;
+    }
+    return runtimeCopyLastErrorFn(buffer, capacity);
 }
 
 extern "C" int kernarium_runtime_loader_sync(void)
@@ -720,9 +753,19 @@ extern "C" int kernarium_runtime_loader_debugger_attached(void)
     struct kinfo_proc information {};
     std::size_t length = sizeof(information);
     int name[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
-    if (sysctl(name, 4, &information, &length, nullptr, 0) != 0)
-        return 0;
-    return (information.kp_proc.p_flag & P_TRACED) != 0 ? 1 : 0;
+    if (sysctl(name, 4, &information, &length, nullptr, 0) == 0 &&
+        (information.kp_proc.p_flag & P_TRACED) != 0)
+        return 1;
+#if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
+    constexpr unsigned statusOperation = 0;
+    constexpr std::uint32_t csDebugged = 0x10000000U;
+    constexpr std::uint32_t csKill = 0x00000200U;
+    std::uint32_t flags = 0;
+    if (csops(getpid(), statusOperation, &flags, sizeof(flags)) == 0 &&
+        (flags & csDebugged) != 0 && (flags & csKill) == 0)
+        return 1;
+#endif
+    return 0;
 }
 #endif
 

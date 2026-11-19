@@ -4,6 +4,8 @@
 #include "host_environment.hpp"
 #include "memory/mmu/address_layout.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <mutex>
 
@@ -96,10 +98,14 @@ NativeKernelLayout prepare_native_kernel_layout(
 		product.geometry, product.placement);
 	if (!layout.valid) {
 		std::fprintf(stderr,
-			"UML: cannot reserve a %llu-byte native kernel window\n",
+			"UML: cannot reserve a %llu-byte native kernel window above "
+			"%#llx (check com.apple.developer.kernel.extended-virtual-"
+			"addressing entitlement)\n",
 			static_cast<unsigned long long>(
 				product.geometry.window_end -
-				product.geometry.window_start));
+				product.geometry.window_start),
+			static_cast<unsigned long long>(
+				DARWIN_UML_NATIVE_LINK_ADDRESS));
 		return {.reservation_failed = true};
 	}
 	return layout;
@@ -159,11 +165,11 @@ NativeKernelLayout reserve_native_kernel_window(
 		geometry.window_end - geometry.window_start);
 	/* Reserve the window before the guest is brought up so nothing else can
 	 * take part of it. The address the geometry names is tried first, so a
-	 * host that still offers it keeps the established layout. iOS 27 does
-	 * not: an app's usable virtual range moved, no hint inside the
-	 * compile-time envelope is honoured any more, and the kernel image would
-	 * be placed outside the window. Such a host is asked where a window of
-	 * this size fits instead of being told. A macOS kernel is built for its
+	 * host that still offers it keeps the established layout. On iOS 16–25,
+	 * top-packed windows near 62 GiB may collide with XNU VM reservations, so
+	 * downward probes toward the 48 GiB link floor and high-VA hints find an
+	 * open slot when the packed hint is moved low. iOS 27 places unhinted
+	 * mappings above 48 GiB automatically. A macOS kernel is built for its
 	 * address and gets no other.
 	 *
 	 * Nothing inside the window is released while it lives, not even for
@@ -173,25 +179,85 @@ NativeKernelLayout reserve_native_kernel_window(
 	 * told. The loader and guest RAM map over the reservation in place.
 	 */
 	const std::size_t reservation = host_reservation_length(length);
-	void *reserved = mmap(reinterpret_cast<void *>(geometry.window_start),
-		reservation, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1,
-		0);
-	if (reserved != MAP_FAILED &&
-	    reinterpret_cast<std::uintptr_t>(reserved) != geometry.window_start) {
-		munmap(reserved, reservation);
-		reserved = placement == WindowPlacement::exact ? MAP_FAILED :
-			mmap(nullptr, reservation, PROT_NONE,
-				MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
-	}
-	if (reserved == MAP_FAILED)
+	if (reservation == 0 || reservation > DARWIN_UML_GUEST_ADDRESS_LIMIT)
 		return {};
-	const auto base = reinterpret_cast<std::uintptr_t>(reserved);
-	if ((base & (DARWIN_UML_GUEST_PAGE_SIZE - 1U)) != 0U ||
-	    base < DARWIN_UML_NATIVE_LINK_ADDRESS) {
-		munmap(reserved, reservation);
-		return {};
+
+	const auto valid_base = [&](std::uintptr_t base) noexcept {
+		return (base & (DARWIN_UML_GUEST_PAGE_SIZE - 1U)) == 0U &&
+			base >= DARWIN_UML_NATIVE_LINK_ADDRESS &&
+			reservation <= DARWIN_UML_GUEST_ADDRESS_LIMIT - base;
+	};
+	const auto try_hint = [&](std::uintptr_t hint) noexcept
+		-> NativeKernelLayout {
+		if (hint != 0U &&
+		    (hint < DARWIN_UML_NATIVE_LINK_ADDRESS ||
+		     hint > DARWIN_UML_GUEST_ADDRESS_LIMIT - reservation))
+			return {};
+		void *const mapped = mmap(reinterpret_cast<void *>(hint),
+			reservation, PROT_NONE,
+			MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+		if (mapped == MAP_FAILED)
+			return {};
+		const auto base = reinterpret_cast<std::uintptr_t>(mapped);
+		if (placement == WindowPlacement::exact) {
+			if (base != geometry.window_start || !valid_base(base)) {
+				munmap(mapped, reservation);
+				return {};
+			}
+			return reserved_layout(base, length);
+		}
+		if (!valid_base(base)) {
+			munmap(mapped, reservation);
+			return {};
+		}
+		return reserved_layout(base, length);
+	};
+
+	if (placement == WindowPlacement::exact)
+		return try_hint(geometry.window_start);
+
+	const auto host_page = static_cast<std::uintptr_t>(getpagesize());
+	const auto align_down_host = [host_page](std::uintptr_t address) noexcept {
+		return address & ~(host_page - 1U);
+	};
+	const std::uintptr_t initial_hint = std::max<std::uintptr_t>(
+		DARWIN_UML_NATIVE_LINK_ADDRESS,
+		align_down_host(geometry.window_start));
+
+	if (const auto found = try_hint(initial_hint); found.valid)
+		return found;
+
+	constexpr std::uintptr_t probe_step = 256ULL * 1024ULL * 1024ULL;
+	if (initial_hint > DARWIN_UML_NATIVE_LINK_ADDRESS) {
+		std::uintptr_t hint = initial_hint;
+		for (;;) {
+			hint = hint - DARWIN_UML_NATIVE_LINK_ADDRESS > probe_step
+				? align_down_host(hint - probe_step)
+				: static_cast<std::uintptr_t>(
+					  DARWIN_UML_NATIVE_LINK_ADDRESS);
+			if (const auto found = try_hint(hint); found.valid)
+				return found;
+			if (hint == static_cast<std::uintptr_t>(
+					    DARWIN_UML_NATIVE_LINK_ADDRESS))
+				break;
+		}
 	}
-	return reserved_layout(base, length);
+
+	constexpr std::uintptr_t gib = 1024ULL * 1024ULL * 1024ULL;
+	constexpr std::array<std::uintptr_t, 6> high_hints {
+		64ULL * gib,
+		80ULL * gib,
+		96ULL * gib,
+		128ULL * gib,
+		256ULL * gib,
+		512ULL * gib,
+	};
+	for (const auto hint : high_hints) {
+		if (const auto found = try_hint(hint); found.valid)
+			return found;
+	}
+
+	return try_hint(0U);
 }
 
 NativeKernelLayoutScope::NativeKernelLayoutScope(

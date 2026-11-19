@@ -40,8 +40,9 @@ struct VMSessionView: View {
             if let vm = session.activeVM {
                 GuestDisplayView(
                     keyboardVisible: $session.keyboardVisible,
-                    retinaMode: vm.retinaDisplay,
+                    retinaMode: vm.displayQuality == .retina,
                     targetDisplayFPS: min(max(vm.targetDisplayFPS, 60), hardware.maxDisplayRefreshRate),
+                    maxLongEdgePixels: vm.displayQuality.maxLongEdgePixels,
                     touchDidBegin: {
                         if session.telemetry.displayActive && !hudCollapsed {
                             withAnimation(.easeOut(duration: 0.2)) {
@@ -136,6 +137,14 @@ struct VMSessionView: View {
                 )
             }
 
+            if case let .stopping(vmName) = session.phase {
+                StoppingSessionOverlay(
+                    vmName: vmName,
+                    detail: session.shutdownStatusDetail ?? "Đang đồng bộ dữ liệu đĩa\u{2026}",
+                    onForceStop: { session.forceStop() }
+                )
+            }
+
             if case let .ended(vmName, exitCode, note) = session.phase {
                 EndedSessionModal(
                     vmName: vmName,
@@ -182,12 +191,20 @@ struct VMSessionView: View {
             Button("Tắt nguồn an toàn (reboot -p)") {
                 session.requestCleanShutdown()
             }
-            Button("Dừng ngay lập tức", role: .destructive) {
+            Button("Dừng nhanh an toàn (Tầng nhân)") {
+                session.requestQuickSafeStop()
+            }
+            if pip.isSupported {
+                Button("Thu nhỏ PiP (Quay lại sau 0 giây)") {
+                    session.togglePiP()
+                }
+            }
+            Button("Ép dừng khẩn cấp", role: .destructive) {
                 session.forceStop()
             }
             Button("Tiếp tục chạy", role: .cancel) {}
         } message: {
-            Text("Tắt nguồn an toàn sẽ đồng bộ dữ liệu đĩa trước khi dừng tiến trình để bảo vệ phân vùng Android.")
+            Text("Chọn Tắt nguồn an toàn hoặc Dừng nhanh tầng nhân để giải phóng RAM sạch và chạy lại được ngay không bị lỗi.")
         }
         .alert(
             "Thông báo phiên chạy",
@@ -501,6 +518,37 @@ private struct LowSpacePauseModal: View {
     }
 }
 
+private struct StoppingSessionOverlay: View {
+    let vmName: String
+    let detail: String
+    let onForceStop: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.68).ignoresSafeArea()
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Đang tắt \(vmName)")
+                    .font(.headline)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Ép dừng ngay", role: .destructive, action: onForceStop)
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .padding(.top, 4)
+            }
+            .padding(22)
+            .frame(maxWidth: 340)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(24)
+        }
+    }
+}
+
 private struct EndedSessionModal: View {
     let vmName: String
     let exitCode: Int32
@@ -628,7 +676,7 @@ private struct SessionStatsSheet: View {
                             Text(
                                 hardware.edition == .metal4Vulkan
                                     ? "KosmicKrisp + Zink"
-                                    : hardware.resolvedGalliumDriver(preference: vm.softwareBackend, jitActive: hardware.debuggerAttached)
+                                    : HostHardwareProfile.resolveGalliumDriver(preference: vm.softwareBackend, jitActive: jitActive)
                             )
                         }
                     }

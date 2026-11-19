@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import Combine
+import CoreGraphics
 import Darwin
 import Foundation
 import GuestHostCore
@@ -29,6 +30,37 @@ nonisolated enum VMBootMode: String, Codable, CaseIterable, Identifiable, Sendab
     }
 }
 
+nonisolated enum VMDisplayQuality: String, Codable, CaseIterable, Identifiable, Sendable {
+    case economy
+    case balanced
+    case retina
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .economy: "Nhanh (720p)"
+        case .balanced: "Cân bằng (1×)"
+        case .retina: "Sắc nét (Retina)"
+        }
+    }
+
+    var badgeTitle: String? {
+        switch self {
+        case .economy: "720p"
+        case .balanced: nil
+        case .retina: "Retina"
+        }
+    }
+
+    var maxLongEdgePixels: CGFloat {
+        switch self {
+        case .economy: 720
+        case .balanced, .retina: 0
+        }
+    }
+}
+
 nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hashable, Sendable {
     let id: UUID
     var name: String
@@ -37,6 +69,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
     var vcpuCount: Int
     var dataDiskGiB: Int
     var retinaDisplay: Bool
+    var displayQuality: VMDisplayQuality
     var autoResizeDisplay: Bool
     var bootMode: VMBootMode
     var microphoneEnabled: Bool
@@ -47,14 +80,17 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
     var afkFrameRateLimit: Int
     var afkBlackoutEnabled: Bool
     var thermalSaverEnabled: Bool
+    var fastUiMode: Bool
+    var preloadRenderer: Bool
     var createdAt: Date
     var lastRunAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, name, systemImageID, guestMemoryMiB, vcpuCount, dataDiskGiB
-        case retinaDisplay, autoResizeDisplay, bootMode, microphoneEnabled
+        case retinaDisplay, displayQuality, autoResizeDisplay, bootMode, microphoneEnabled
         case adbOverLan, preferJitIfAvailable, softwareBackend, targetDisplayFPS
         case afkFrameRateLimit, afkBlackoutEnabled, thermalSaverEnabled
+        case fastUiMode, preloadRenderer
         case createdAt, lastRunAt
     }
 
@@ -66,6 +102,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         vcpuCount: Int,
         dataDiskGiB: Int,
         retinaDisplay: Bool,
+        displayQuality: VMDisplayQuality? = nil,
         autoResizeDisplay: Bool,
         bootMode: VMBootMode,
         microphoneEnabled: Bool,
@@ -76,16 +113,20 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         afkFrameRateLimit: Int,
         afkBlackoutEnabled: Bool,
         thermalSaverEnabled: Bool = false,
+        fastUiMode: Bool = true,
+        preloadRenderer: Bool = false,
         createdAt: Date,
         lastRunAt: Date?
     ) {
+        let resolvedQuality = displayQuality ?? (retinaDisplay ? .retina : .balanced)
         self.id = id
         self.name = name
         self.systemImageID = systemImageID
         self.guestMemoryMiB = guestMemoryMiB
         self.vcpuCount = vcpuCount
         self.dataDiskGiB = dataDiskGiB
-        self.retinaDisplay = retinaDisplay
+        self.displayQuality = resolvedQuality
+        self.retinaDisplay = (resolvedQuality == .retina)
         self.autoResizeDisplay = autoResizeDisplay
         self.bootMode = bootMode
         self.microphoneEnabled = microphoneEnabled
@@ -96,6 +137,8 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         self.afkFrameRateLimit = afkFrameRateLimit
         self.afkBlackoutEnabled = afkBlackoutEnabled
         self.thermalSaverEnabled = thermalSaverEnabled
+        self.fastUiMode = fastUiMode
+        self.preloadRenderer = preloadRenderer
         self.createdAt = createdAt
         self.lastRunAt = lastRunAt
     }
@@ -108,7 +151,11 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         guestMemoryMiB = try c.decode(Int.self, forKey: .guestMemoryMiB)
         vcpuCount = try c.decode(Int.self, forKey: .vcpuCount)
         dataDiskGiB = try c.decode(Int.self, forKey: .dataDiskGiB)
-        retinaDisplay = try c.decode(Bool.self, forKey: .retinaDisplay)
+        let decodedRetina = try c.decode(Bool.self, forKey: .retinaDisplay)
+        let decodedQuality = try c.decodeIfPresent(VMDisplayQuality.self, forKey: .displayQuality)
+            ?? (decodedRetina ? .retina : .balanced)
+        displayQuality = decodedQuality
+        retinaDisplay = (decodedQuality == .retina)
         autoResizeDisplay = try c.decode(Bool.self, forKey: .autoResizeDisplay)
         bootMode = try c.decode(VMBootMode.self, forKey: .bootMode)
         microphoneEnabled = try c.decode(Bool.self, forKey: .microphoneEnabled)
@@ -119,6 +166,8 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         afkFrameRateLimit = try c.decode(Int.self, forKey: .afkFrameRateLimit)
         afkBlackoutEnabled = try c.decode(Bool.self, forKey: .afkBlackoutEnabled)
         thermalSaverEnabled = try c.decodeIfPresent(Bool.self, forKey: .thermalSaverEnabled) ?? false
+        fastUiMode = try c.decodeIfPresent(Bool.self, forKey: .fastUiMode) ?? true
+        preloadRenderer = try c.decodeIfPresent(Bool.self, forKey: .preloadRenderer) ?? false
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         lastRunAt = try c.decodeIfPresent(Date.self, forKey: .lastRunAt)
     }
@@ -216,6 +265,7 @@ final class VirtualMachineStore: ObservableObject {
     func makeDefaultConfig(name: String, systemImageID: UUID, hardware: HostHardwareProfile) -> VirtualMachineConfig {
         let vcpus = hardware.defaultVCPUs()
         let ram = hardware.safeRecommendedMemoryMiB(for: vcpus)
+        let quality = hardware.defaultDisplayQuality()
         return VirtualMachineConfig(
             id: UUID(),
             name: name,
@@ -223,7 +273,8 @@ final class VirtualMachineStore: ObservableObject {
             guestMemoryMiB: ram,
             vcpuCount: vcpus,
             dataDiskGiB: 16,
-            retinaDisplay: hardware.defaultRetinaDisplay(),
+            retinaDisplay: (quality == .retina),
+            displayQuality: quality,
             autoResizeDisplay: true,
             bootMode: .auto,
             microphoneEnabled: false,
@@ -234,6 +285,8 @@ final class VirtualMachineStore: ObservableObject {
             afkFrameRateLimit: 10,
             afkBlackoutEnabled: true,
             thermalSaverEnabled: false,
+            fastUiMode: true,
+            preloadRenderer: hardware.defaultPreloadRenderer(),
             createdAt: Date(),
             lastRunAt: nil
         )
@@ -243,11 +296,14 @@ final class VirtualMachineStore: ObservableObject {
     func applySafeProfile(for id: UUID, hardware: HostHardwareProfile) -> VirtualMachineConfig? {
         guard var cfg = machines.first(where: { $0.id == id }) else { return nil }
         let safeVCPUs = hardware.defaultVCPUs()
+        let safeQuality = hardware.defaultDisplayQuality()
         cfg.vcpuCount = safeVCPUs
         cfg.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: safeVCPUs)
-        cfg.retinaDisplay = hardware.defaultRetinaDisplay()
+        cfg.displayQuality = safeQuality
+        cfg.retinaDisplay = (safeQuality == .retina)
         cfg.softwareBackend = .auto
         cfg.preferJitIfAvailable = true
+        cfg.preloadRenderer = hardware.defaultPreloadRenderer()
         save(cfg)
         try? FileManager.default.removeItem(at: sessionRecordURL(for: id))
         objectWillChange.send()
@@ -305,6 +361,7 @@ final class VirtualMachineStore: ObservableObject {
             vcpuCount: source.vcpuCount,
             dataDiskGiB: source.dataDiskGiB,
             retinaDisplay: source.retinaDisplay,
+            displayQuality: source.displayQuality,
             autoResizeDisplay: source.autoResizeDisplay,
             bootMode: source.bootMode,
             microphoneEnabled: source.microphoneEnabled,
@@ -315,6 +372,8 @@ final class VirtualMachineStore: ObservableObject {
             afkFrameRateLimit: source.afkFrameRateLimit,
             afkBlackoutEnabled: source.afkBlackoutEnabled,
             thermalSaverEnabled: source.thermalSaverEnabled,
+            fastUiMode: source.fastUiMode,
+            preloadRenderer: source.preloadRenderer,
             createdAt: Date(),
             lastRunAt: nil
         )

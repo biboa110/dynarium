@@ -77,6 +77,7 @@
 #include <mach/mach_time.h>
 #include <malloc/malloc.h>
 #include <os/proc.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -237,6 +238,47 @@ const std::shared_ptr<uml::audio::MicrophoneSwitch>& microphoneSwitch()
 void publishConsoleOutput(const void* buffer, std::size_t length)
 {
     kernarium::console::output().publish(buffer, length);
+}
+
+struct RuntimeDiagnosticState final {
+    std::mutex mutex;
+    std::string lastError;
+};
+
+RuntimeDiagnosticState& runtimeDiagnostic = *new RuntimeDiagnosticState;
+
+void clearRuntimeError() noexcept
+{
+    try {
+        std::lock_guard lock(runtimeDiagnostic.mutex);
+        runtimeDiagnostic.lastError.clear();
+    } catch (...) {
+    }
+}
+
+void recordRuntimeError(std::string_view message) noexcept
+{
+    try {
+        if (message.empty())
+            return;
+        {
+            std::lock_guard lock(runtimeDiagnostic.mutex);
+            if (runtimeDiagnostic.lastError.empty()) {
+                runtimeDiagnostic.lastError.assign(message.substr(
+                    0, std::min<std::size_t>(message.size(), 1024U)));
+            }
+        }
+        std::fprintf(
+            stderr,
+            "Dynarium: %.*s\n",
+            static_cast<int>(message.size()),
+            message.data());
+        std::string line {"[Dynarium] "};
+        line.append(message);
+        line.push_back('\n');
+        publishConsoleOutput(line.data(), line.size());
+    } catch (...) {
+    }
 }
 
 class AppNetwork final {
@@ -900,9 +942,15 @@ void appendKernelCommandLine(
         uml::android::readKernelCommandLine(path, launcherPrefixes);
 #if UML_GPU_SOFTWARE_RENDERER
     (void)tightMemoryHost;
+#else
+    const char* preloadEnv = std::getenv("DYNARIUM_RENDERER_PRELOAD");
+    const bool forcePreloadOn =
+        preloadEnv != nullptr && std::strcmp(preloadEnv, "1") == 0;
 #endif
     bool sawSetupWizard = false;
     bool sawSerialNo = false;
+    bool sawAudit = false;
+    bool sawLogLevel = false;
     for (auto& argument : releaseArguments) {
         if (argument.starts_with("androidboot.setupwizard_mode=")) {
             argument = "androidboot.setupwizard_mode=DISABLED";
@@ -910,6 +958,12 @@ void appendKernelCommandLine(
         } else if (argument.starts_with("androidboot.serialno=")) {
             argument = "androidboot.serialno=dynarium17";
             sawSerialNo = true;
+        } else if (argument.starts_with("audit=")) {
+            argument = "audit=0";
+            sawAudit = true;
+        } else if (argument.starts_with("loglevel=")) {
+            argument = "loglevel=3";
+            sawLogLevel = true;
         }
 #if UML_GPU_SOFTWARE_RENDERER
         if (argument.starts_with("androidboot.opengles.version=")) {
@@ -922,11 +976,15 @@ void appendKernelCommandLine(
                 "androidboot.hardware.guest_disable_renderer_preload=true";
         }
 #else
-        if (tightMemoryHost &&
-            argument.starts_with(
+        if (argument.starts_with(
                 "androidboot.hardware.guest_disable_renderer_preload=")) {
-            argument =
-                "androidboot.hardware.guest_disable_renderer_preload=true";
+            if (forcePreloadOn) {
+                argument =
+                    "androidboot.hardware.guest_disable_renderer_preload=false";
+            } else if (tightMemoryHost) {
+                argument =
+                    "androidboot.hardware.guest_disable_renderer_preload=true";
+            }
         }
 #endif
         arguments.push_back(std::move(argument));
@@ -936,6 +994,12 @@ void appendKernelCommandLine(
     }
     if (!sawSerialNo) {
         arguments.emplace_back("androidboot.serialno=dynarium17");
+    }
+    if (!sawAudit) {
+        arguments.emplace_back("audit=0");
+    }
+    if (!sawLogLevel) {
+        arguments.emplace_back("loglevel=3");
     }
 
     /* Android init imports this as ro.boot.lcd_density. The product's vendor
@@ -1204,17 +1268,16 @@ public:
             return true;
         } catch (const std::exception& error) {
             boot_.reset();
-            std::fprintf(
-                stderr,
-                restarts == 0 ? "Kernarium: startup failed: %s\n" :
-                                "Kernarium: unable to restart the guest: %s\n",
+            recordRuntimeError(
+                std::string(restarts == 0 ? "Khoi tao may ao that bai: " :
+                                            "Khoi dong lai may ao that bai: ") +
                 error.what());
             return false;
         } catch (...) {
             boot_.reset();
-            std::fputs(restarts == 0 ? "Kernarium: startup failed\n" :
-                                       "Kernarium: unable to restart the guest\n",
-                stderr);
+            recordRuntimeError(
+                restarts == 0 ? "Khoi tao may ao that bai: loi khong xac dinh" :
+                                "Khoi dong lai may ao that bai: loi khong xac dinh");
             return false;
         }
     }
@@ -1356,12 +1419,34 @@ private:
                 uml::input::virtio::DeviceKind::keyboard);
         boot->audio = uml::audio::makeInProcessService(
             {.microphone = microphoneSwitch()});
-        if (!uml::platform::videoDecodeCapabilities().empty())
-            boot->video = uml::video::makeInProcessService(
-                sharedMemoryRegions_);
-        if (!uml::platform::videoEncodeCapabilities().empty())
-            boot->videoEncoder = uml::video::makeInProcessEncoderService(
-                sharedMemoryRegions_);
+        try {
+            if (!uml::platform::videoDecodeCapabilities().empty())
+                boot->video = uml::video::makeInProcessService(
+                    sharedMemoryRegions_);
+        } catch (const std::exception& error) {
+            std::string notice =
+                std::string("[Dynarium] Bo qua bo giai ma video phan cung: ") +
+                error.what() + "\n";
+            publishConsoleOutput(notice.data(), notice.size());
+        } catch (...) {
+            constexpr std::string_view notice =
+                "[Dynarium] Bo qua bo giai ma video phan cung do loi khoi tao\n";
+            publishConsoleOutput(notice.data(), notice.size());
+        }
+        try {
+            if (!uml::platform::videoEncodeCapabilities().empty())
+                boot->videoEncoder = uml::video::makeInProcessEncoderService(
+                    sharedMemoryRegions_);
+        } catch (const std::exception& error) {
+            std::string notice =
+                std::string("[Dynarium] Bo qua bo ma hoa video phan cung: ") +
+                error.what() + "\n";
+            publishConsoleOutput(notice.data(), notice.size());
+        } catch (...) {
+            constexpr std::string_view notice =
+                "[Dynarium] Bo qua bo ma hoa video phan cung do loi khoi tao\n";
+            publishConsoleOutput(notice.data(), notice.size());
+        }
 #if KERNARIUM_RUNTIME_ANDROID_GUEST
         boot->battery = uml::battery::makeInProcessService();
 #endif
@@ -1707,6 +1792,7 @@ int runtimeRun(
     const kernarium_runtime_boot* boot)
 {
     try {
+        clearRuntimeError();
         /* A pre-existing Swift worker need not inherit the initial main-thread
          * mask. Keep the launcher itself ineligible for ITIMER_REAL throughout
          * the managed run; every runtime worker it creates inherits this mask.
@@ -1715,7 +1801,7 @@ int runtimeRun(
         ActiveRuntime active;
         if (view == nullptr || boot == nullptr ||
             boot->struct_size < bootSizeBeforeAdbKey) {
-            std::fputs("Kernarium: invalid boot request\n", stderr);
+            recordRuntimeError("Yeu cau khoi dong may ao khong hop le");
             return -UML_EMULATOR_INVALID_ARGUMENT;
         }
         /* Read only from a request large enough to hold it, and no further
@@ -1774,9 +1860,11 @@ int runtimeRun(
             guestProcessorCount > maximumGuestProcessorCount ||
             guestMemoryMiB < 512U || guestMemoryMiB > 4096U ||
             guestMemoryMiB % 64U != 0) {
-            std::fputs(
-                "Kernarium: invalid guest CPU or memory configuration\n",
-                stderr);
+            recordRuntimeError(
+                "Cau hinh vCPU hoac RAM may ao khong hop le (vCPU=" +
+                std::to_string(guestProcessorCount) + "/" +
+                std::to_string(maximumGuestProcessorCount) + ", RAM=" +
+                std::to_string(guestMemoryMiB) + " MiB)");
             return -UML_EMULATOR_INVALID_ARGUMENT;
         }
         GuestRequest request;
@@ -1828,8 +1916,8 @@ int runtimeRun(
                     prepared.capacityGiB);
             request.androidStorage.emplace(release, dataDisk);
         } catch (const std::exception& error) {
-            std::fprintf(
-                stderr, "Kernarium: cannot prepare the Android disks: %s\n",
+            recordRuntimeError(
+                std::string("Khong the chuan bi o dia Android: ") +
                 error.what());
             return -UML_EMULATOR_INVALID_ARGUMENT;
         }
@@ -1980,9 +2068,9 @@ int runtimeRun(
             uml_emulator* created = nullptr;
             const int createResult = uml_emulator_create(&config, &created);
             if (createResult != UML_EMULATOR_OK) {
-                std::fprintf(
-                    stderr, "Kernarium: emulator creation failed: %d\n",
-                    createResult);
+                recordRuntimeError(
+                    "Khong the khoi tao doi tuong emulator (ma " +
+                    std::to_string(createResult) + ")");
                 return createResult;
             }
             emulator.reset(created);
@@ -2007,12 +2095,53 @@ int runtimeRun(
                 result = kernarium::restart::run(guest);
             }
         }
+        if (result == -UML_EMULATOR_RUNTIME_ERROR) {
+            constexpr std::uintptr_t linkBase = 0x0000000c00000000ULL;
+            constexpr std::array<std::uintptr_t, 5> vaHints {
+                0x0000000c00000000ULL,
+                0x0000000d00000000ULL,
+                0x0000000e00000000ULL,
+                0x0000001000000000ULL,
+                0U,
+            };
+            bool hasExtendedVa = false;
+            for (const auto hint : vaHints) {
+                void* probe = mmap(
+                    reinterpret_cast<void*>(hint),
+                    65536U,
+                    PROT_NONE,
+                    MAP_PRIVATE | MAP_ANON | MAP_NORESERVE,
+                    -1,
+                    0);
+                if (probe == MAP_FAILED)
+                    continue;
+                const auto base = reinterpret_cast<std::uintptr_t>(probe);
+                munmap(probe, 65536U);
+                if (base >= linkBase) {
+                    hasExtendedVa = true;
+                    break;
+                }
+            }
+            if (!hasExtendedVa) {
+                recordRuntimeError(
+                    "Thieu quyen khong gian dia chi ao mo rong (Extended "
+                    "Virtual Addressing 64 GiB >= 48 GiB). Hay kiem tra "
+                    "entitlements khi ky IPA hoac cai bang TrollStore.");
+            } else {
+                recordRuntimeError(
+                    "Runtime tra ve loi -4 khi nap nhan Linux hoac thiet bi "
+                    "ao (xem chi tiet trong Serial Console).");
+            }
+        }
 #if KERNARIUM_RUNTIME_ANDROID_GUEST
         // Only Android's own clean power-off may return a reusable process.
         if (result == 0) {
             uml_emulator_run_end end {.struct_size = sizeof(end)};
             if (uml_emulator_get_run_end(emulator.get(), &end) != UML_EMULATOR_OK ||
                 end.kind != UML_EMULATOR_RUN_END_POWER_OFF) {
+                recordRuntimeError(
+                    "May ao bi ep dung ngang (chua tat nguon POWER_OFF) nen "
+                    "khong the thu hoi vung nho trong cung phien app.");
                 result = -UML_EMULATOR_RUNTIME_ERROR;
             } else {
                 result = uml_emulator_release_guest(emulator.get());
@@ -2023,18 +2152,20 @@ int runtimeRun(
                     result = uml_emulator_release_guest(emulator.get());
                 }
                 if (result != 0)
-                    std::fprintf(stderr,
-                        "Kernarium: clean shutdown could not release the guest: %d\n", result);
+                    recordRuntimeError(
+                        "Khong the thu hoi vung nho nhan sau khi tat nguon (ma " +
+                        std::to_string(result) + ")");
             }
         }
 #endif
         std::printf("Kernarium: guest exited with status %d\n", result);
         return result;
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "Kernarium: startup failed: %s\n", error.what());
+        recordRuntimeError(
+            std::string("Loi khoi chay may ao: ") + error.what());
         return -UML_EMULATOR_RUNTIME_ERROR;
     } catch (...) {
-        std::fputs("Kernarium: startup failed\n", stderr);
+        recordRuntimeError("Loi khoi chay may ao khong xac dinh");
         return -UML_EMULATOR_RUNTIME_ERROR;
     }
 }
@@ -2594,6 +2725,34 @@ kernarium_runtime_automation_hold_delay_ms(void)
     return delay.milliseconds;
 }
 #endif
+
+extern "C" KERNARIUM_RUNTIME_EXPORT int kernarium_runtime_request_halt(void)
+{
+    std::lock_guard lock(emulatorLifecycleMutex);
+    if (activeEmulator == nullptr)
+        return -UML_EMULATOR_UNSUPPORTED;
+    return uml_emulator_halt_guest(activeEmulator);
+}
+
+extern "C" KERNARIUM_RUNTIME_EXPORT std::size_t
+kernarium_runtime_copy_last_error(char* buffer, std::size_t capacity)
+{
+    try {
+        std::lock_guard lock(runtimeDiagnostic.mutex);
+        if (buffer != nullptr && capacity != 0U) {
+            const std::size_t count =
+                std::min(capacity - 1U, runtimeDiagnostic.lastError.size());
+            if (count != 0U)
+                std::memcpy(buffer, runtimeDiagnostic.lastError.data(), count);
+            buffer[count] = '\0';
+        }
+        return runtimeDiagnostic.lastError.size();
+    } catch (...) {
+        if (buffer != nullptr && capacity != 0U)
+            buffer[0] = '\0';
+        return 0U;
+    }
+}
 
 extern "C" const kernarium_runtime_api* kernarium_runtime_get_api_v28(void)
 {

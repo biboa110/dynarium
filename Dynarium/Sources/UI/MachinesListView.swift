@@ -92,6 +92,30 @@ struct MachinesListView: View {
         List {
             Section {
                 HardwareSummaryCard(hardware: hardware)
+                if !hardware.hasExtendedVirtualAddressing {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Thiếu quyền địa chỉ ảo 64 GiB (lỗi mã -4)", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        Text("Công cụ ký đã gỡ bỏ entitlement Extended Virtual Addressing. Trên iOS 16 hãy cài IPA bằng TrollStore hoặc dùng chứng chỉ giữ nguyên entitlements để chạy máy ảo.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+                }
+                if session.processRequiresRestart {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Cần khởi động lại ứng dụng Dynarium", systemImage: "arrow.clockwise.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        Text("Phiên trước bị ép dừng ngang nên vùng nhớ nhân vẫn còn giữ lại. Hãy vuốt đóng hoàn toàn ứng dụng Dynarium rồi mở lại để tránh lỗi mã -3.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+                }
                 if hardware.recommendsMetal4Edition && !dismissedMetal4Tip {
                     Metal4RecommendationBanner(
                         chipLabel: hardware.chipGenerationLabel,
@@ -268,6 +292,18 @@ private struct HardwareSummaryCard: View {
                     label: "Bộ nhớ trống",
                     value: Formats.size(bytes: hardware.hostFreeDiskBytes)
                 )
+            }
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(hardware.debuggerAttached ? Color.green : Color.secondary.opacity(0.45))
+                    .frame(width: 7, height: 7)
+                Text(hardware.debuggerAttached
+                     ? "JIT đang bật — Tốc độ CPU tối đa"
+                     : "Chưa bật JIT (Gadget) — Bật JIT qua TrollStore / StikDebug để nhanh hơn 4–8×")
+                    .font(.caption2)
+                    .foregroundStyle(hardware.debuggerAttached ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 4)
@@ -461,8 +497,8 @@ private struct VMRowView: View {
                     systemImage: "internaldrive"
                 )
                 Spacer(minLength: 0)
-                if vm.retinaDisplay {
-                    Text("Retina")
+                if let qualityBadge = vm.displayQuality.badgeTitle {
+                    Text(qualityBadge)
                         .font(.caption2.weight(.medium))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)

@@ -39,6 +39,14 @@ int kernarium_runtime_loader_run(
     const kernarium_runtime_boot* boot);
 
 void kernarium_runtime_loader_request_stop(void);
+/* Requests a synchronous clean kernel halt via UML management console so the
+ * guest exits via UML_EMULATOR_RUN_END_POWER_OFF and releases its RAM cleanly. */
+int kernarium_runtime_loader_request_halt(void);
+/* Copies the last diagnostic error recorded by the runtime into `buffer`
+ * (always NUL-terminated when `capacity > 0`). Returns total error length. */
+size_t kernarium_runtime_loader_copy_last_error(
+    char* _Nullable buffer,
+    size_t capacity);
 /* Flushes the guest's writable host files. Returns the number that could not
  * be flushed, or a negative value when no runtime is loaded. */
 int kernarium_runtime_loader_sync(void);

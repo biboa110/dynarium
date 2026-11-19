@@ -682,6 +682,11 @@ bool wake_guest() noexcept
 	return requestGuest("wake", replyWait) == GuestRequest::done;
 }
 
+GuestRequest halt_guest() noexcept
+{
+	return requestGuest("halt", replyWait);
+}
+
 GuestRequest set_guest_page_cache_trim(bool enabled) noexcept
 {
 	return requestGuest(enabled ? "trim on" : "trim off", replyWait);

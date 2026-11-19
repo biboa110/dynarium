@@ -39,8 +39,12 @@ struct SettingsView: View {
                             .monospacedDigit()
                     }
                     LabeledContent("Trạng thái JIT / Debugger") {
-                        Text(hardware.debuggerAttached ? "Đang gắn (JIT khả dụng)" : "Không gắn (An toàn non-JIT)")
+                        Text(hardware.debuggerAttached ? "Đang gắn / CS_DEBUGGED (JIT khả dụng)" : "Không gắn (An toàn non-JIT)")
                             .foregroundStyle(hardware.debuggerAttached ? .green : .secondary)
+                    }
+                    LabeledContent("Không gian địa chỉ 64 GiB") {
+                        Text(hardware.hasExtendedVirtualAddressing ? "Đã kích hoạt" : "Thiếu quyền ký")
+                            .foregroundStyle(hardware.hasExtendedVirtualAddressing ? .green : .orange)
                     }
                 } header: {
                     Text("Phiên bản & Phần cứng")
@@ -90,6 +94,28 @@ struct SettingsView: View {
                     } label: {
                         Label("Giới thiệu, Nguồn mở & Ghi công", systemImage: "doc.text")
                     }
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("TrollStore (iOS 16 – 17)", systemImage: "bolt.shield")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Nhấn giữ biểu tượng Dynarium trong TrollStore và chọn Enable JIT (hoặc mở từ TrollStore), sau đó vào app khởi động máy ảo.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("StikDebug / SideStore (iOS 17 – 27+)", systemImage: "terminal")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Mở StikDebug để gắn JIT vào Dynarium trước khi bấm nút Chạy máy ảo. Sau khi biên dịch xong vùng nhớ, debugger tự tách an toàn.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                } header: {
+                    Text("Tăng tốc CPU 4×–8× với JIT")
                 }
             }
             .navigationTitle("Cài đặt")
