@@ -225,6 +225,7 @@ void encoders_match_llvm_mc() {
     check("csinc w3, w4, w5, le", enc::csinc(3, 4, 5, 13), 0x1a85d483U);
     check("cset w3, le", enc::cset(3, 13), 0x1a9fc7e3U);
     check("msr nzcv, x3", enc::msr_nzcv(3), 0xd51b4203U);
+    check("mrs x3, nzcv", enc::mrs_nzcv(3), 0xd53b4203U);
     check("rmif x3, #5, #9", enc::rmif(3, 5, 9), 0xba028469U);
     check("ldr w3, [x4, #8]", enc::ldr_w(3, 4, 8), 0xb9400883U);
     check("str w3, [x4, #8]", enc::str_w(3, 4, 8), 0xb9000883U);

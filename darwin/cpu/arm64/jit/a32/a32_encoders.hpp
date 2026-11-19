@@ -436,6 +436,10 @@ namespace detail {
 }
 
 /* The flags. */
+[[nodiscard]] constexpr std::uint32_t mrs_nzcv(unsigned d) noexcept
+{
+	return 0xd53b'4200U | d;
+}
 [[nodiscard]] constexpr std::uint32_t msr_nzcv(unsigned n) noexcept
 {
 	return 0xd51b'4200U | n;

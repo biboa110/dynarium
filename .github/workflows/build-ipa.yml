@@ -402,19 +402,16 @@ jobs:
 
           ## What's New in `{tag}`
 
-          - **Fix Apple A11 / iOS 16 Kernel Panic (`Attempted to kill init! exitcode=0x00000004` / `SIGILL`):**
-            - Narrowed iOS C++ inline-asm compiler flag from `-march=armv8.2-a+fp16+dotprod+crypto+fcma` to `-march=armv8.2-a+fp16+crypto` so carrier threads never emit A12+/A13+ instructions on Apple A11 (`iPhone10,x`).
-            - Added legacy iOS 16 `hw.optional.*` `sysctl` fallbacks (`armv8_1_atomics`, `armv8_crc32`, `neon_fp16`, etc.) when `hw.optional.arm.FEAT_*` OIDs are absent.
-            - Lowered `FEAT_LRCPC` (`LDAPR`) and enabled `FEAT_LRCPC2` (`LDAPUR`/`STLUR`) safely in both JIT and Gadget engines without A12/A13 hardware requirements.
-            - Added software fallbacks in JIT for `FEAT_DotProd` (`SDOT`/`UDOT`/`USDOT`/`SUDOT`), `FEAT_RDM` (`SQRDMLAH`/`SQRDMLSH`), and `FEAT_DIT` (`MSR/MRS DIT`), matching Gadget parity on A11/A12.
-            - Captured guest `SIGILL` diagnostics (`[dynarium-sigill]`) in `session.record` and added friendly Apple A11 Bionic / A10 Fusion labels.
-          - **Full Multi-Language Support & In-App Language Settings:**
-            - Added **App Language** switcher in **Settings** (`System Default`, `English`, `Tiếng Việt`, `简体中文`, `日本語`, `한국어`, `Español`) with instant live switching across the entire app without restarting running VMs.
+          - **Fix Apple A11 / iOS 16 `Kernel mode signal 4` (`Darwin POSIX signal=4`) in AArch32 JIT (`boringssl_self_test32`):**
+            - Gated ARMv8.4 `RMIF` (`FEAT_FlagM`) in `A32Compiler::restore_logical_flags()` (`darwin/cpu/arm64/jit/a32/a32_compiler_alu.cpp`) behind `host_capabilities().has(ArmFeature::flag_m)` and added a pure ARMv8.0 `MRS`/`MSR NZCV` fallback (via `enc::mrs_nzcv` in `a32_encoders.hpp`) so 32-bit AArch32 binaries run safely on Apple A11 (`iPhone10,6`) without host `SIGILL`.
+          - **Includes all `v1.5.0` A11 & Localization improvements:**
+            - Fixed `/init` early `SIGILL` (`exitcode=0x00000004`) on Apple A11 / iOS 16 (narrowed C++ inline-asm `-march`, legacy `hw.optional.*` sysctl fallbacks, ARMv8.0 `LDAR` & software `DotProd`/`RDM`/`DIT` fallbacks, `[dynarium-sigill]` diagnostics).
+            - Full 6-language localization (`System Default`, `English`, `Tiếng Việt`, `简体中文`, `日本語`, `한국어`, `Español`) with instant live language switching in **Settings**.
 
           ## Điểm mới trong `{tag}` (Tiếng Việt)
 
-          - **Sửa triệt để lỗi Kernel Panic `Attempted to kill init! exitcode=0x00000004` (`SIGILL`) trên iPhone X (Apple A11) & iOS 16:** Hạ ISA C++ xuống `armv8.2-a+fp16+crypto`, bổ sung sysctl dự phòng cho iOS 16, hạ `LDAPR`/`LDAPUR`/`STLUR` về `LDAR`/helper chuẩn ARMv8.0 trên cả JIT & Gadget, thêm fallback phần mềm cho `DotProd`/`RDM`/`DIT` trong JIT và ghi log `[dynarium-sigill]` vào `session.record`. *(Khuyên dùng `Dynarium-{tag}.ipa` Universal cho iPhone X & iPhone 14 Pro Max chạy iOS 16.)*
-          - **Hỗ trợ Đa Ngôn Ngữ & Cài đặt Ngôn ngữ trực tiếp trong app:** Tự động theo máy hoặc chọn thủ công **English, Tiếng Việt, 简体中文, 日本語, 한국어, Español** trong tab **Cài đặt / Settings**, đổi giao diện tức thì không cần tắt máy ảo.
+          - **Sửa dứt điểm lỗi `Darwin POSIX signal=4` / `Kernel mode signal 4` khi chạy tiến trình 32-bit (`boringssl_self_test32`) trên iPhone X (Apple A11, iOS 16):** Bổ sung nhánh fallback chuẩn ARMv8.0 (`MRS`/`MSR NZCV`) thay cho lệnh ARMv8.4 `RMIF` (`FEAT_FlagM`) trong bộ biên dịch AArch32 JIT (`a32_compiler_alu.cpp`, `a32_encoders.hpp`) khi thiết bị không có `FEAT_FlagM`. *(Khuyên dùng `Dynarium-{tag}.ipa` Universal cho iPhone X & iPhone 14 Pro Max chạy iOS 16.)*
+          - **Kế thừa toàn bộ vá lỗi & tính năng từ `v1.5.0`:** Sửa lỗi `/init` `SIGILL` (`exitcode=0x00000004`) trên A11 và hỗ trợ **Cài đặt Ngôn ngữ** tức thì (**English, Tiếng Việt, 简体中文, 日本語, 한국어, Español**).
 
           > Core Attribution: Built upon [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) and inspired by [`ish-app/ish`](https://github.com/ish-app/ish).
           """

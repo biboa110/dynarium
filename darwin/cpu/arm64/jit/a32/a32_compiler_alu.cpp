@@ -5,8 +5,8 @@
 // compiler keeps them. Arithmetic maps one for one onto the host flags (the
 // carry is "no borrow" on both). A logical operation sets N and Z from its
 // result, C from the shifter's carry-out and leaves V; it reads the old flags
-// into x11 first and restores what it keeps with RMIF (FEAT_FlagM, which
-// every Apple Silicon host has).
+// into x11 first and restores what it keeps with RMIF where FEAT_FlagM is
+// present, or an ARMv8.0 MRS/MSR NZCV sequence on hosts without it.
 //
 // Registers: an operand lives in its resident register or a fallback (x9 for
 // Rn and for a destination, x10 for Rm, x1 for Rs), x0, x1 and x8 are
@@ -18,6 +18,7 @@
 #include "a32_operations.hpp"
 
 #include "cpu/arm64/aarch32/decode_support.hpp"
+#include "cpu/host_capabilities.hpp"
 
 namespace uml::cpu::arm64::jit::a32 {
 
@@ -573,6 +574,47 @@ A32Compiler::Flow A32Compiler::emit_data_processing(const OpInfo &info) {
  * value and C takes the shifter's carry-out (old image in x11). */
 void A32Compiler::restore_logical_flags(CarryKind carry, unsigned carry_reg,
                                         unsigned carry_rot) {
+  if (!::uml::cpu::host_capabilities().has(::uml::cpu::ArmFeature::flag_m)) {
+    constexpr std::uint32_t cv_mask = *enc::logical_immediate_field(0x3000'0000U);
+    constexpr std::uint32_t v_mask = *enc::logical_immediate_field(0x1000'0000U);
+    constexpr std::uint32_t c_mask = *enc::logical_immediate_field(0x2000'0000U);
+    // Host NZCV currently holds (N_new, Z_new, C=0, V=0) from ANDS/BICS/TST.
+    emit(enc::mrs_nzcv(temp1));
+    switch (carry) {
+    case CarryKind::unchanged:
+      emit(enc::and_i(temp2, image, cv_mask));
+      emit(enc::orr(temp1, temp1, temp2));
+      break;
+    case CarryKind::clear:
+      emit(enc::and_i(temp2, image, v_mask));
+      emit(enc::orr(temp1, temp1, temp2));
+      break;
+    case CarryKind::set:
+      emit(enc::and_i(temp2, image, v_mask));
+      emit(enc::orr(temp1, temp1, temp2));
+      emit(enc::orr_i(temp1, temp1, c_mask));
+      break;
+    case CarryKind::bit: {
+      // RMIF carry_reg, #carry_rot, #2 places ROR64(X[carry_reg], carry_rot)<1>
+      // == X[carry_reg]<(carry_rot + 1) & 63> into PSTATE.C (bit 29).
+      const unsigned carry_bit = (carry_rot + 1U) & 63U;
+      emit(enc::x::ubfx(temp2, carry_reg, carry_bit, 1));
+      emit(enc::orr(temp1, temp1, temp2, enc::lsl, 29));
+      emit(enc::and_i(temp2, image, v_mask));
+      emit(enc::orr(temp1, temp1, temp2));
+      break;
+    }
+    case CarryKind::computed:
+      // shift_by_register_carry leaves the carry bit in temp0<1>.
+      emit(enc::ubfx(temp2, temp0, 1, 1));
+      emit(enc::orr(temp1, temp1, temp2, enc::lsl, 29));
+      emit(enc::and_i(temp2, image, v_mask));
+      emit(enc::orr(temp1, temp1, temp2));
+      break;
+    }
+    emit(enc::msr_nzcv(temp1));
+    return;
+  }
   switch (carry) {
   case CarryKind::unchanged:
     emit(enc::rmif(image, 28, 3));
