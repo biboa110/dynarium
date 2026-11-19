@@ -280,17 +280,23 @@ final class SystemImageStore: NSObject, ObservableObject {
         try? FileManager.default.removeItem(at: stageDir)
         defer { try? FileManager.default.removeItem(at: stageDir) }
 
-        try await Task.detached(priority: .userInitiated) { [weak self] in
-            try ArchiveExtractor.extractTarArchive(from: archiveURL, to: stageDir) { prog in
-                Task { @MainActor [weak self] in
-                    guard let self, self.activeInstall != nil else { return }
-                    self.activeInstall?.phase = .extracting(
-                        fraction: prog.fraction,
-                        entry: prog.currentEntry,
-                        sparseSavedBytes: prog.sparseSkippedBytes
-                    )
-                }
+        let progressCallback: @Sendable (ExtractionProgress) -> Void = { [weak self] prog in
+            Task { @MainActor [weak self] in
+                guard let self, self.activeInstall != nil else { return }
+                self.activeInstall?.phase = .extracting(
+                    fraction: prog.fraction,
+                    entry: prog.currentEntry,
+                    sparseSavedBytes: prog.sparseSkippedBytes
+                )
             }
+        }
+
+        try await Task.detached(priority: .userInitiated) {
+            try ArchiveExtractor.extractTarArchive(
+                from: archiveURL,
+                to: stageDir,
+                progress: progressCallback
+            )
         }.value
 
         try Task.checkCancellation()

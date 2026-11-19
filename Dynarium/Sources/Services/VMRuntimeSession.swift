@@ -57,7 +57,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published private(set) var telemetry = VMTelemetrySnapshot()
     @Published private(set) var consoleText: String = ""
     @Published private(set) var spacePause: SpacePause?
-    @Published private(set) var startSpaceShortage: StartSpace?
+    @Published var startSpaceShortage: StartSpace?
     @Published private(set) var afkEcoMode: Bool = false
     @Published private(set) var oledBlackoutActive: Bool = false
     @Published private(set) var microphoneOn: Bool = false

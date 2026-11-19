@@ -15,8 +15,16 @@ enum SceneCoverage {
     }
 
     static func covers(_ scene: UIWindowScene) -> Bool {
-        covers(
-            sceneSize: scene.effectiveGeometry.coordinateSpace.bounds.size,
+        if #available(iOS 26.0, *) {
+            return covers(
+                sceneSize: scene.effectiveGeometry.coordinateSpace.bounds.size,
+                screenSize: scene.screen.bounds.size
+            )
+        }
+        let windowSize = (scene.windows.first(where: \.isKeyWindow) ?? scene.windows.first)?.bounds.size
+            ?? scene.screen.bounds.size
+        return covers(
+            sceneSize: windowSize,
             screenSize: scene.screen.bounds.size
         )
     }

@@ -100,7 +100,7 @@ struct FloatingSessionHUD: View {
                             }
 
                             Button {
-                                session.setMicrophone(!session.microphoneOn)
+                                session.setMicrophone(enabled: !session.microphoneOn)
                             } label: {
                                 Label(
                                     session.microphoneOn ? "Tắt Micro Android" : "Bật Micro Android",

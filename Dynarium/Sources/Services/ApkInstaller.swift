@@ -199,7 +199,7 @@ final class ApkInstaller: ObservableObject {
                         onState(.transferring(detail: "\(split.fileName) (\(idx + 1)/\(splits.count))", progress: frac))
                     }
                     let writeRes = String(decoding: try writeStream.readToEnd(limit: 16 * 1024), as: UTF8.self)
-                    if let err = PackageErrorMessages.failureMessage(inOutput: writeRes) {
+                    if let err = PackageErrorMessages.failureMessage(in: writeRes) {
                         throw AdbError.remote(err)
                     }
                 }
@@ -208,7 +208,7 @@ final class ApkInstaller: ObservableObject {
                 session.watchdog.arm(idle: nil, overall: 15 * 60)
                 let commitStream = try conn.open("abb_exec:package\0install-commit\0\(sessionID)")
                 let commitOut = String(decoding: try commitStream.readToEnd(limit: 32 * 1024), as: UTF8.self)
-                if let err = PackageErrorMessages.failureMessage(inOutput: commitOut) {
+                if let err = PackageErrorMessages.failureMessage(in: commitOut) {
                     throw AdbError.remote(err)
                 }
             } catch {
@@ -246,7 +246,7 @@ final class ApkInstaller: ObservableObject {
         }
         watchdog.arm(idle: nil, overall: 15 * 60)
         let output = String(decoding: try stream.readToEnd(limit: 64 * 1024), as: UTF8.self)
-        if let err = PackageErrorMessages.failureMessage(inOutput: output) {
+        if let err = PackageErrorMessages.failureMessage(in: output) {
             throw AdbError.remote(err)
         }
     }

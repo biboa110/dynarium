@@ -68,6 +68,7 @@ jobs:
         run: |
           log=$(mktemp)
           if (
+            set -e
             mkdir -p .build
             gh release download deps-ios16-latest -p dynarium-deps-ios16-arm64.tar.gz -D .build --clobber
             tar -xzf .build/dynarium-deps-ios16-arm64.tar.gz -C .build
@@ -109,6 +110,7 @@ jobs:
         run: |
           log=$(mktemp)
           if (
+            set -e
             cmake --preset kernarium-ios-device-android
             cmake --build --preset kernarium-ios-device-android
             ./Dynarium/scripts/package-dynarium-frameworks.sh --tier ios16-universal
@@ -125,6 +127,7 @@ jobs:
         run: |
           log=$(mktemp)
           if (
+            set -e
             (CDPATH= cd -- "$PWD/Dynarium" && xcodegen generate)
             xcodebuild \
               -project Dynarium/Dynarium.xcodeproj \
@@ -138,7 +141,7 @@ jobs:
               CODE_SIGN_IDENTITY="" \
               IPHONEOS_DEPLOYMENT_TARGET=16.0 \
               build
-            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//')
+            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//' | tr -d ' \r\n')
             ./Dynarium/scripts/package-ipa.sh \
               --app .build/xcode-ios16/Build/Products/Release-iphoneos/Dynarium.app \
               --output "artifacts/Dynarium-v${VERSION}.ipa" \
@@ -225,6 +228,7 @@ jobs:
         run: |
           log=$(mktemp)
           if (
+            set -e
             PREFIX_VULKAN="$PWD/.build/dependencies/apple-gpu-vulkan-experiment-26/ios-device-arm64"
             if [ ! -f "$PREFIX_VULKAN/share/uml-dependencies/ios-device-gpu-vulkan-arm64.tsv" ]; then
               ./dependencies/prepare.sh --product apple-gpu-vulkan-experiment
@@ -275,6 +279,7 @@ jobs:
         run: |
           log=$(mktemp)
           if (
+            set -e
             cmake --preset kernarium-ios-device-android \
               -B .build/kernarium-runtime-ios26-android-4k \
               -DUML_APPLE_DEPLOYMENT_TARGET=26.0 \
@@ -295,6 +300,7 @@ jobs:
         run: |
           log=$(mktemp)
           if (
+            set -e
             (CDPATH= cd -- "$PWD/Dynarium" && xcodegen generate)
             xcodebuild \
               -project Dynarium/Dynarium.xcodeproj \
@@ -308,7 +314,7 @@ jobs:
               CODE_SIGN_IDENTITY="" \
               IPHONEOS_DEPLOYMENT_TARGET=26.0 \
               build
-            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//')
+            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//' | tr -d ' \r\n')
             ./Dynarium/scripts/package-ipa.sh \
               --app .build/xcode-ios26/Build/Products/Release-iphoneos/Dynarium.app \
               --output "artifacts/Dynarium-v${VERSION}-Metal4-iOS26.ipa" \

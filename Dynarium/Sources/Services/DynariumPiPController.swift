@@ -10,21 +10,32 @@ import Foundation
 import SwiftUI
 import UIKit
 
+private nonisolated struct SendablePixelBuffer: @unchecked Sendable {
+    let buffer: CVPixelBuffer
+}
+
+private nonisolated struct SendableLayerBox: @unchecked Sendable {
+    let layer: AVSampleBufferDisplayLayer
+}
+
 private nonisolated final class PiPFrameConsumer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.dynarium.pip.sample-enqueue", qos: .userInteractive)
-    private let layer: AVSampleBufferDisplayLayer
+    private let layerBox: SendableLayerBox
     private let hostClock = CMClockGetHostTimeClock()
 
     init(layer: AVSampleBufferDisplayLayer) {
-        self.layer = layer
+        self.layerBox = SendableLayerBox(layer: layer)
     }
 
     func receive(pixelBuffer: CVPixelBuffer) {
-        queue.async { [layer, hostClock] in
+        let box = SendablePixelBuffer(buffer: pixelBuffer)
+        let targetLayer = layerBox
+        queue.async { [targetLayer, hostClock, box] in
+            let layer = targetLayer.layer
             var formatDescription: CMVideoFormatDescription?
             let fmtStatus = CMVideoFormatDescriptionCreateForImageBuffer(
                 allocator: kCFAllocatorDefault,
-                imageBuffer: pixelBuffer,
+                imageBuffer: box.buffer,
                 formatDescriptionOut: &formatDescription
             )
             guard fmtStatus == noErr, let format = formatDescription else { return }
@@ -39,7 +50,7 @@ private nonisolated final class PiPFrameConsumer: @unchecked Sendable {
             var sampleBuffer: CMSampleBuffer?
             let sampleStatus = CMSampleBufferCreateReadyWithImageBuffer(
                 allocator: kCFAllocatorDefault,
-                imageBuffer: pixelBuffer,
+                imageBuffer: box.buffer,
                 formatDescription: format,
                 sampleTiming: &timing,
                 sampleBufferOut: &sampleBuffer

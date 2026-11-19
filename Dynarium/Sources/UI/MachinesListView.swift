@@ -22,68 +22,24 @@ struct MachinesListView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HardwareSummaryCard(hardware: hardware)
-                } header: {
-                    Text("Nền tảng phần cứng")
-                }
+            listWithSheets
+                .modifier(
+                    MachineAlertsModifier(
+                        confirmingWipeVM: $confirmingWipeVM,
+                        confirmingDeleteVM: $confirmingDeleteVM,
+                        shortage: $session.startSpaceShortage,
+                        cloneErrorMessage: $cloneErrorMessage,
+                        deviceKindName: hardware.deviceKindName,
+                        onWipe: { vmStore.wipeDataDisk(for: $0) },
+                        onDelete: { vmStore.deleteVM($0) }
+                    )
+                )
+        }
+    }
 
-                if imageStore.images.isEmpty {
-                    Section {
-                        NoImageGuidanceCard(action: switchToImagesTab)
-                    } header: {
-                        Text("Bắt đầu nhanh")
-                    }
-                } else if vmStore.machines.isEmpty {
-                    Section {
-                        NoMachineGuidanceCard {
-                            presentingCreate = true
-                        }
-                    } header: {
-                        Text("Máy ảo Android")
-                    }
-                } else {
-                    Section {
-                        ForEach(vmStore.machines) { vm in
-                            VMRowView(
-                                vm: vm,
-                                image: imageStore.images.first(where: { $0.id == vm.systemImageID }),
-                                diskAllocatedBytes: vmStore.dataDiskAllocatedBytes(for: vm.id),
-                                diskCreated: vmStore.dataDiskExists(for: vm.id),
-                                lastNote: vmStore.lastSessionSummary(for: vm.id),
-                                isCloning: cloningVMID == vm.id,
-                                canLaunch: !session.phase.isActive,
-                                onLaunch: { launch(vm) },
-                                onEdit: { editingVM = vm },
-                                onClone: { clone(vm) },
-                                onWipeData: { confirmingWipeVM = vm },
-                                onDelete: { confirmingDeleteVM = vm }
-                            )
-                        }
-                    } header: {
-                        Text("Danh sách máy ảo (\(vmStore.machines.count))")
-                    } footer: {
-                        Text("Các máy ảo dùng chung hệ điều hành gốc ở chế độ chỉ đọc và lưu dữ liệu riêng theo chuẩn thưa APFS (CoW).")
-                    }
-                }
-            }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Dynarium")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        presentingCreate = true
-                    } label: {
-                        Label("Tạo máy ảo", systemImage: "plus")
-                    }
-                    .disabled(imageStore.images.isEmpty)
-                }
-            }
-            .onAppear {
-                hardware.refreshDynamicMetrics()
-                vmStore.reload()
-            }
+    @ViewBuilder
+    private var listWithSheets: some View {
+        listView
             .sheet(isPresented: $presentingCreate) {
                 if let firstImage = imageStore.images.first {
                     VMConfigurationSheet(
@@ -99,67 +55,83 @@ struct MachinesListView: View {
             .sheet(item: $editingVM) { vm in
                 VMConfigurationSheet(mode: .edit, initialConfig: vm)
             }
-            .confirmationDialog(
-                "Đặt lại dữ liệu máy ảo?",
-                isPresented: Binding(
-                    get: { confirmingWipeVM != nil },
-                    set: { if !$0 { confirmingWipeVM = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                if let target = confirmingWipeVM {
-                    Button("Xóa sạch phân vùng Data", role: .destructive) {
-                        vmStore.wipeDataDisk(for: target.id)
-                        confirmingWipeVM = nil
-                    }
-                }
-                Button("Hủy", role: .cancel) { confirmingWipeVM = nil }
-            } message: {
-                Text("Toàn bộ ứng dụng đã cài và dữ liệu trong data.img sẽ bị xóa; cấu hình máy ảo vẫn được giữ lại.")
+    }
+
+    @ViewBuilder
+    private var listView: some View {
+        List {
+            Section {
+                HardwareSummaryCard(hardware: hardware)
+            } header: {
+                Text("Nền tảng phần cứng")
             }
-            .confirmationDialog(
-                "Xóa máy ảo vĩnh viễn?",
-                isPresented: Binding(
-                    get: { confirmingDeleteVM != nil },
-                    set: { if !$0 { confirmingDeleteVM = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                if let target = confirmingDeleteVM {
-                    Button("Xóa máy ảo", role: .destructive) {
-                        vmStore.deleteVM(target.id)
-                        confirmingDeleteVM = nil
-                    }
+
+            machinesSection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Dynarium")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    presentingCreate = true
+                } label: {
+                    Label("Tạo máy ảo", systemImage: "plus")
                 }
-                Button("Hủy", role: .cancel) { confirmingDeleteVM = nil }
-            } message: {
-                Text("Hành động này xóa cả cấu hình và dữ liệu người dùng của máy ảo.")
-            }
-            .alert(
-                "Không đủ dung lượng trống",
-                isPresented: Binding(
-                    get: { session.startSpaceShortage != nil },
-                    set: { if !$0 { session.startSpaceShortage = nil } }
-                )
-            ) {
-                Button("Đóng", role: .cancel) { session.startSpaceShortage = nil }
-            } message: {
-                if let shortage = session.startSpaceShortage {
-                    Text(shortage.message(device: hardware.deviceKindName) + "\n" + shortage.advice(device: hardware.deviceKindName))
-                }
-            }
-            .alert(
-                "Không thể nhân bản máy ảo",
-                isPresented: Binding(
-                    get: { cloneErrorMessage != nil },
-                    set: { if !$0 { cloneErrorMessage = nil } }
-                )
-            ) {
-                Button("Đóng", role: .cancel) { cloneErrorMessage = nil }
-            } message: {
-                Text(cloneErrorMessage ?? "")
+                .disabled(imageStore.images.isEmpty)
             }
         }
+        .onAppear {
+            hardware.refreshDynamicMetrics()
+            vmStore.reload()
+        }
+    }
+
+    @ViewBuilder
+    private var machinesSection: some View {
+        if imageStore.images.isEmpty {
+            Section {
+                NoImageGuidanceCard(action: switchToImagesTab)
+            } header: {
+                Text("Bắt đầu nhanh")
+            }
+        } else if vmStore.machines.isEmpty {
+            Section {
+                NoMachineGuidanceCard {
+                    presentingCreate = true
+                }
+            } header: {
+                Text("Máy ảo Android")
+            }
+        } else {
+            Section {
+                ForEach(vmStore.machines) { vm in
+                    vmRow(for: vm)
+                }
+            } header: {
+                Text("Danh sách máy ảo (\(vmStore.machines.count))")
+            } footer: {
+                Text("Các máy ảo dùng chung hệ điều hành gốc ở chế độ chỉ đọc và lưu dữ liệu riêng theo chuẩn thưa APFS (CoW).")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func vmRow(for vm: VirtualMachineConfig) -> some View {
+        let linkedImage = imageStore.images.first { $0.id == vm.systemImageID }
+        VMRowView(
+            vm: vm,
+            image: linkedImage,
+            diskAllocatedBytes: vmStore.dataDiskAllocatedBytes(for: vm.id),
+            diskCreated: vmStore.dataDiskExists(for: vm.id),
+            lastNote: vmStore.lastSessionSummary(for: vm.id),
+            isCloning: cloningVMID == vm.id,
+            canLaunch: !session.phase.isActive,
+            onLaunch: { launch(vm) },
+            onEdit: { editingVM = vm },
+            onClone: { clone(vm) },
+            onWipeData: { confirmingWipeVM = vm },
+            onDelete: { confirmingDeleteVM = vm }
+        )
     }
 
     private func nextDefaultVMName() -> String {
@@ -418,5 +390,81 @@ private struct VMRowView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct MachineAlertsModifier: ViewModifier {
+    @Binding var confirmingWipeVM: VirtualMachineConfig?
+    @Binding var confirmingDeleteVM: VirtualMachineConfig?
+    @Binding var shortage: StartSpace?
+    @Binding var cloneErrorMessage: String?
+    let deviceKindName: String
+    let onWipe: (UUID) -> Void
+    let onDelete: (UUID) -> Void
+
+    func body(content: Content) -> some View {
+        let withWipe = content.confirmationDialog(
+            "Đặt lại dữ liệu máy ảo?",
+            isPresented: Binding(
+                get: { confirmingWipeVM != nil },
+                set: { if !$0 { confirmingWipeVM = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let target = confirmingWipeVM {
+                Button("Xóa sạch phân vùng Data", role: .destructive) {
+                    onWipe(target.id)
+                    confirmingWipeVM = nil
+                }
+            }
+            Button("Hủy", role: .cancel) { confirmingWipeVM = nil }
+        } message: {
+            Text("Toàn bộ ứng dụng đã cài và dữ liệu trong data.img sẽ bị xóa; cấu hình máy ảo vẫn được giữ lại.")
+        }
+
+        let withDelete = withWipe.confirmationDialog(
+            "Xóa máy ảo vĩnh viễn?",
+            isPresented: Binding(
+                get: { confirmingDeleteVM != nil },
+                set: { if !$0 { confirmingDeleteVM = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let target = confirmingDeleteVM {
+                Button("Xóa máy ảo", role: .destructive) {
+                    onDelete(target.id)
+                    confirmingDeleteVM = nil
+                }
+            }
+            Button("Hủy", role: .cancel) { confirmingDeleteVM = nil }
+        } message: {
+            Text("Hành động này xóa cả cấu hình và dữ liệu người dùng của máy ảo.")
+        }
+
+        let withSpaceAlert = withDelete.alert(
+            "Không đủ dung lượng trống",
+            isPresented: Binding(
+                get: { shortage != nil },
+                set: { if !$0 { shortage = nil } }
+            )
+        ) {
+            Button("Đóng", role: .cancel) { shortage = nil }
+        } message: {
+            if let s = shortage {
+                Text(s.message(device: deviceKindName) + "\n" + s.advice(device: deviceKindName))
+            }
+        }
+
+        withSpaceAlert.alert(
+            "Không thể nhân bản máy ảo",
+            isPresented: Binding(
+                get: { cloneErrorMessage != nil },
+                set: { if !$0 { cloneErrorMessage = nil } }
+            )
+        ) {
+            Button("Đóng", role: .cancel) { cloneErrorMessage = nil }
+        } message: {
+            Text(cloneErrorMessage ?? "")
+        }
     }
 }
