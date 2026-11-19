@@ -528,10 +528,15 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         }
 
         if code == Int32(KERNARIUM_RUNTIME_RESULT_RESTART_LOOP) {
+            let releaseFailed = runtimeDetail.contains("chua thu hoi duoc vung nho nhan")
+            processRequiresRestart = releaseFailed
+            let detailLine = runtimeDetail.isEmpty
+                ? "Android khởi động lại liên tục 5 lần nên hypervisor đã dừng bảo vệ."
+                : runtimeDetail
             phase = .ended(
                 vmName: name,
                 exitCode: code,
-                note: "Android khởi động lại liên tục 5 lần nên hypervisor đã dừng bảo vệ."
+                note: "\(detailLine).\n\nHãy mở Serial Console để xem dòng log cuối trước khi tự khởi động lại. Nếu data.img bị lỗi sau lần dừng đột ngột trước đó, thử 'Đặt lại dữ liệu (Wipe)' trong menu máy ảo."
             )
             return
         }
@@ -596,10 +601,13 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         }
 
         if code == 126 {
+            let note = runtimeDetail.isEmpty
+                ? "Không thể nạp nhân Linux nhúng (__TEXT,__uml_elf, mã 126). Hãy mở Console hoặc cài đặt lại gói IPA."
+                : "Không thể nạp nhân Linux nhúng (__TEXT,__uml_elf, mã 126): \(runtimeDetail)"
             phase = .ended(
                 vmName: name,
                 exitCode: code,
-                note: "Không thể nạp nhân Linux nhúng (__TEXT,__uml_elf, mã 126). Hãy mở Console hoặc cài đặt lại gói IPA."
+                note: note
             )
             return
         }

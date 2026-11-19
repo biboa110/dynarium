@@ -44,17 +44,17 @@ nonisolated enum PreferredSoftwareBackend: String, Codable, CaseIterable, Identi
 
     var displayName: String {
         switch self {
-        case .auto: "Tự động (An toàn)"
+        case .auto: "Tự động (Softpipe an toàn)"
         case .softpipe: "Softpipe (Không cần JIT)"
-        case .llvmpipe: "LLVMpipe (Chỉ khi bật JIT)"
+        case .llvmpipe: "LLVMpipe (Thử nghiệm)"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .auto: "Dùng softpipe khi không có JIT; tự nâng lên llvmpipe khi phát hiện JIT/Simulator."
+        case .auto: "Dùng softpipe ổn định trên iPhone/iPad thật (CPU JIT vẫn tăng tốc riêng cho CPU Android); tự dùng llvmpipe trên Simulator."
         case .softpipe: "Thuần CPU interpreter, tương thích mọi thiết bị sideload chưa kích hoạt JIT."
-        case .llvmpipe: "Nhanh hơn cho CPU rendering nhưng yêu cầu quyền JIT hoặc trình gỡ lỗi đang gắn."
+        case .llvmpipe: "Yêu cầu MAP_JIT từ LLVM; trên thiết bị iOS thật sẽ tự động lùi về softpipe nếu không khởi tạo được."
         }
     }
 }
@@ -400,7 +400,7 @@ final class HostHardwareProfile: ObservableObject {
         )
     }
 
-    nonisolated static func resolveGalliumDriver(preference: PreferredSoftwareBackend, jitActive: Bool) -> String {
+    nonisolated static func resolveGalliumDriver(preference: PreferredSoftwareBackend, jitActive _: Bool) -> String {
         switch preference {
         case .softpipe:
             return "softpipe"
@@ -410,7 +410,9 @@ final class HostHardwareProfile: ObservableObject {
             #if targetEnvironment(simulator)
             return "llvmpipe"
             #else
-            return jitActive ? "llvmpipe" : "softpipe"
+            // Physical iOS devices use dual-mapped vm_remap for CPU JIT, whereas Mesa's
+            // upstream LLVM MCJIT uses MAP_JIT and fails on non-entitled iOS devices.
+            return "softpipe"
             #endif
         }
     }

@@ -3,6 +3,7 @@
 
 #include "host_environment.hpp"
 #include "memory/mmu/address_layout.hpp"
+#include "memory/shared_backing.hpp"
 
 #include <algorithm>
 #include <array>
@@ -120,6 +121,33 @@ NativeKernelLayout reserve_process_native_window(
 		geometry.window_end - geometry.window_start);
 	std::lock_guard lock{process_window.mutex};
 	const bool held = process_window.end != 0;
+	if (!held && placement == WindowPlacement::anywhere) {
+		/* Reserve a generous PROT_NONE | MAP_NORESERVE VA window upfront on
+		 * iOS so later VM restarts at higher RAM reuse the same base without
+		 * unmapping permanent signed kernel text aliases. */
+		constexpr std::size_t gib = 1024ULL * 1024ULL * 1024ULL;
+		constexpr std::array<std::size_t, 3> upfront_guests {
+			4ULL * gib, 3ULL * gib, 2ULL * gib};
+		for (const auto guest_ceiling : upfront_guests) {
+			const auto candidate =
+				DeviceNativeKernelGeometry::derive(guest_ceiling);
+			if (!candidate.valid ||
+			    candidate.window_end <= candidate.window_start)
+				continue;
+			const std::size_t candidate_length = static_cast<std::size_t>(
+				candidate.window_end - candidate.window_start);
+			if (candidate_length < length)
+				continue;
+			const auto window =
+				reserve_native_kernel_window(candidate, placement);
+			if (!window.valid)
+				continue;
+			process_window.begin = window.window_start;
+			process_window.end = window.window_start +
+				host_reservation_length(candidate_length);
+			return reserved_layout(process_window.begin, length);
+		}
+	}
 	/* A window the host places is the window wherever it is; one at an exact
 	 * address must be at that address. */
 	const bool fits_place = held &&
@@ -128,20 +156,38 @@ NativeKernelLayout reserve_process_native_window(
 	if (fits_place &&
 	    process_window.end - process_window.begin >= length)
 		return reserved_layout(process_window.begin, length);
-	if (fits_place && placement == WindowPlacement::exact) {
-		const std::uintptr_t new_end = process_window.begin +
-			host_reservation_length(length);
-		if (!extend_reservation(process_window.end, new_end))
+	if (fits_place) {
+		const std::size_t aligned_length = host_reservation_length(length);
+		if (aligned_length <=
+		    static_cast<std::size_t>(
+			    DARWIN_UML_GUEST_ADDRESS_LIMIT - process_window.begin)) {
+			const std::uintptr_t new_end =
+				process_window.begin + aligned_length;
+			if (extend_reservation(process_window.end, new_end)) {
+				process_window.end = new_end;
+				return reserved_layout(process_window.begin, length);
+			}
+		}
+		if (placement == WindowPlacement::exact)
 			return {};
-		process_window.end = new_end;
-		return reserved_layout(process_window.begin, length);
+		if (::uml::memory::has_kept_host_ranges()) {
+			std::fprintf(stderr,
+				"UML: cannot grow native kernel window after signed "
+				"kernel text was locked in place (held %llu MiB, "
+				"wanted %llu MiB); reduce RAM or restart the app\n",
+				static_cast<unsigned long long>(
+					(process_window.end - process_window.begin) >> 20),
+				static_cast<unsigned long long>(length >> 20));
+			return {};
+		}
 	}
 	const auto window = reserve_native_kernel_window(geometry, placement);
 	if (!window.valid)
 		return {};
 	/* The new reservation is held first, so a failure above leaves the old
 	 * one. The old holds nothing: it was a window for a guest the process no
-	 * longer has, handed back or never booted. */
+	 * longer has, handed back or never booted, and no permanent signed text
+	 * ranges remain inside it. */
 	if (held)
 		munmap(reinterpret_cast<void *>(process_window.begin),
 			process_window.end - process_window.begin);
@@ -227,7 +273,7 @@ NativeKernelLayout reserve_native_kernel_window(
 	if (const auto found = try_hint(initial_hint); found.valid)
 		return found;
 
-	constexpr std::uintptr_t probe_step = 256ULL * 1024ULL * 1024ULL;
+	constexpr std::uintptr_t probe_step = 64ULL * 1024ULL * 1024ULL;
 	if (initial_hint > DARWIN_UML_NATIVE_LINK_ADDRESS) {
 		std::uintptr_t hint = initial_hint;
 		for (;;) {

@@ -131,6 +131,9 @@ struct AnonymousBackingMemory final {
 [[nodiscard]] bool host_range_kept(
 	const void *address, std::size_t length) noexcept;
 
+/* Whether any permanent range (such as iOS signed kernel text) is kept. */
+[[nodiscard]] bool has_kept_host_ranges() noexcept;
+
 /* Keep a retiring domain's guest RAM page mapped while a view borrows it.
  *
  * A view of the anonymous root borrows the root's own mapping, and its holder

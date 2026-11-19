@@ -10,6 +10,7 @@
 #include <mach/mach.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,10 +20,53 @@
 
 #include <algorithm>
 #include <limits>
+#include <mutex>
 #include <type_traits>
 #include <vector>
 
 namespace {
+
+struct ElfLastError final {
+	std::mutex mutex;
+	char message[512]{};
+};
+
+[[clang::no_destroy]] constinit ElfLastError elf_last_error;
+
+void clear_elf_error() noexcept
+{
+	std::lock_guard lock{elf_last_error.mutex};
+	elf_last_error.message[0] = '\0';
+}
+
+void store_elf_error_text(const char *text) noexcept
+{
+	if (text == nullptr)
+		return;
+	std::lock_guard lock{elf_last_error.mutex};
+	snprintf(elf_last_error.message, sizeof(elf_last_error.message),
+		"%s", text);
+}
+
+[[gnu::format(printf, 1, 2)]] void set_elf_error(
+	const char *format, ...) noexcept
+{
+	char formatted[512]{};
+	va_list args;
+	va_start(args, format);
+	(void)vsnprintf(formatted, sizeof(formatted), format, args);
+	va_end(args);
+	fprintf(stderr, "%s\n", formatted);
+	store_elf_error_text(formatted);
+}
+
+void set_elf_errno(const char *prefix) noexcept
+{
+	const int err = errno;
+	const char *detail = strerror(err);
+	set_elf_error("%s: %s (errno %d)", prefix,
+		detail != nullptr ? detail : "unknown error", err);
+}
 
 struct LoadedSegment final {
 	uintptr_t begin{};
@@ -157,9 +201,13 @@ private:
 	    (current_protection & (VM_PROT_READ | VM_PROT_EXECUTE)) !=
 		(VM_PROT_READ | VM_PROT_EXECUTE) ||
 	    (maximum_protection & VM_PROT_EXECUTE) == 0) {
-		fprintf(stderr,
-			"UML ELF: cannot alias signed kernel text at %#lx: %s\n",
+		set_elf_error(
+			"UML ELF: cannot alias signed kernel text at %#lx "
+			"(target=%#lx, cur=%#x, max=%#x): %s",
 			static_cast<unsigned long>(destination),
+			static_cast<unsigned long>(target),
+			static_cast<unsigned int>(current_protection),
+			static_cast<unsigned int>(maximum_protection),
 			mach_error_string(result));
 		return -1;
 	}
@@ -233,15 +281,15 @@ private:
 		if (result == KERN_INVALID_ADDRESS || address >= maximum)
 			return 0;
 		if (result != KERN_SUCCESS || size == 0) {
-			fprintf(stderr,
-				"UML ELF: cannot audit Darwin VM protections: %s\n",
+			set_elf_error(
+				"UML ELF: cannot audit Darwin VM protections: %s",
 				mach_error_string(result));
 			return -1;
 		}
 		if ((info.protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
 		    (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
-			fprintf(stderr,
-				"UML ELF: writable-executable Darwin VM region at %#lx\n",
+			set_elf_error(
+				"UML ELF: writable-executable Darwin VM region at %#lx",
 				static_cast<unsigned long>(address));
 			return -1;
 		}
@@ -329,21 +377,21 @@ private:
 		case UML_DT_PLTREL:
 			saw_pltrel = true;
 			if (entry.un.value != UML_DT_RELA_VALUE) {
-				fprintf(stderr, "UML ELF: non-RELA PLT relocations\n");
+				set_elf_error("UML ELF: non-RELA PLT relocations");
 				return -1;
 			}
 			break;
 		case UML_DT_RELR:
 		case UML_DT_RELRSZ:
 		case UML_DT_RELRENT:
-			fprintf(stderr, "UML ELF: packed RELR is not supported\n");
+			set_elf_error("UML ELF: packed RELR is not supported");
 			return -1;
 		default:
 			break;
 		}
 	}
 	if (!terminated) {
-		fprintf(stderr, "UML ELF: unterminated dynamic table\n");
+		set_elf_error("UML ELF: unterminated dynamic table");
 		return -1;
 	}
 	if (info.relaent == 0)
@@ -353,11 +401,11 @@ private:
 	if (info.relaent != sizeof(uml_elf64_rela) ||
 	    info.syment != sizeof(uml_elf64_sym) ||
 	    relasz % info.relaent != 0 || pltrelsz % info.relaent != 0) {
-		fprintf(stderr, "UML ELF: unexpected dynamic entry size\n");
+		set_elf_error("UML ELF: unexpected dynamic entry size");
 		return -1;
 	}
 	if (pltrelsz != 0 && !saw_pltrel) {
-		fprintf(stderr, "UML ELF: PLT relocation encoding is unspecified\n");
+		set_elf_error("UML ELF: PLT relocation encoding is unspecified");
 		return -1;
 	}
 
@@ -385,7 +433,7 @@ private:
 	if (!assign_table(rela_address, relasz, info.rela, info.rela_count) ||
 	    !assign_table(jmprel_address, pltrelsz, info.jmprel,
 		info.jmprel_count)) {
-		fprintf(stderr, "UML ELF: relocation table is outside loaded segments\n");
+		set_elf_error("UML ELF: relocation table is outside loaded segments");
 		return -1;
 	}
 	if (info.strsz != 0) {
@@ -393,7 +441,7 @@ private:
 		if (strtab_address == 0 ||
 		    !runtime_address(bias, strtab_address, address) ||
 		    !loaded_range_inside(segments, address, info.strsz)) {
-			fprintf(stderr, "UML ELF: string table is outside loaded segments\n");
+			set_elf_error("UML ELF: string table is outside loaded segments");
 			return -1;
 		}
 		info.strtab = reinterpret_cast<const char *>(address);
@@ -402,12 +450,12 @@ private:
 		uintptr_t address;
 		if (!runtime_address(bias, symtab_address, address) ||
 		    address % alignof(uml_elf64_sym) != 0) {
-			fprintf(stderr, "UML ELF: invalid symbol table address\n");
+			set_elf_error("UML ELF: invalid symbol table address");
 			return -1;
 		}
 		const auto available = loaded_bytes_available(segments, address);
 		if (available < sizeof(uml_elf64_sym)) {
-			fprintf(stderr, "UML ELF: symbol table is outside loaded segments\n");
+			set_elf_error("UML ELF: symbol table is outside loaded segments");
 			return -1;
 		}
 		info.symtab = reinterpret_cast<const uml_elf64_sym *>(address);
@@ -429,7 +477,7 @@ private:
 		    destination_address % alignof(uintptr_t) != 0 ||
 		    !loaded_range_inside(segments, destination_address,
 			sizeof(uintptr_t))) {
-			fprintf(stderr, "UML ELF: relocation destination is out of range\n");
+			set_elf_error("UML ELF: relocation destination is out of range");
 			return -1;
 		}
 		auto *destination = reinterpret_cast<uintptr_t *>(destination_address);
@@ -437,7 +485,7 @@ private:
 
 		if (type == UML_R_AARCH64_RELATIVE) {
 			if (!checked_add_signed(bias, rela.addend, value)) {
-				fprintf(stderr, "UML ELF: relative relocation overflows\n");
+				set_elf_error("UML ELF: relative relocation overflows");
 				return -1;
 			}
 			*destination = value;
@@ -446,12 +494,12 @@ private:
 		if (type != UML_R_AARCH64_ABS64 &&
 		    type != UML_R_AARCH64_GLOB_DAT &&
 		    type != UML_R_AARCH64_JUMP_SLOT) {
-			fprintf(stderr, "UML ELF: unsupported relocation %u\n", type);
+			set_elf_error("UML ELF: unsupported relocation %u", type);
 			return -1;
 		}
 		if (info.symtab == nullptr || info.strtab == nullptr ||
 		    symbol_index >= info.symbol_count) {
-			fprintf(stderr, "UML ELF: relocation has invalid symbol index\n");
+			set_elf_error("UML ELF: relocation has invalid symbol index");
 			return -1;
 		}
 
@@ -459,14 +507,14 @@ private:
 		if (symbol.name >= info.strsz ||
 		    memchr(info.strtab + symbol.name, '\0',
 			info.strsz - symbol.name) == nullptr) {
-			fprintf(stderr, "UML ELF: invalid symbol name\n");
+			set_elf_error("UML ELF: invalid symbol name");
 			return -1;
 		}
 		if (symbol.shndx != UML_SHN_UNDEF) {
 			if (!runtime_address(bias, symbol.value, value) ||
 			    !loaded_range_inside(segments, value,
 				std::max<size_t>(1, symbol.size))) {
-				fprintf(stderr, "UML ELF: defined symbol is out of range\n");
+				set_elf_error("UML ELF: defined symbol is out of range");
 				return -1;
 			}
 		} else {
@@ -474,14 +522,14 @@ private:
 			void *resolved = resolve_symbol(name);
 			if (resolved == nullptr &&
 			    UML_ELF64_ST_BIND(symbol.info) != UML_STB_WEAK) {
-				fprintf(stderr, "UML ELF: unresolved Darwin symbol: %s\n",
+				set_elf_error("UML ELF: unresolved Darwin symbol: %s",
 					name);
 				return -1;
 			}
 			value = reinterpret_cast<uintptr_t>(resolved);
 		}
 		if (!checked_add_signed(value, rela.addend, value)) {
-			fprintf(stderr, "UML ELF: symbol relocation overflows\n");
+			set_elf_error("UML ELF: symbol relocation overflows");
 			return -1;
 		}
 		*destination = value;
@@ -502,8 +550,8 @@ private:
 		const auto page = (destination - minimum) / page_size;
 		if (page < page_protections.size() &&
 		    (page_protections[page] & PROT_EXEC) != 0) {
-			fprintf(stderr,
-				"UML ELF: relocation targets immutable signed text\n");
+			set_elf_error(
+				"UML ELF: relocation targets immutable signed text");
 			return -1;
 		}
 	}
@@ -514,9 +562,10 @@ private:
 	uintptr_t load_bias, uintptr_t window_start, uintptr_t window_end,
 	int argc, char **argv, char **envp)
 {
+	clear_elf_error();
 	if (image == nullptr || image_size < sizeof(uml_elf64_ehdr) ||
 	    reinterpret_cast<uintptr_t>(image) % alignof(uml_elf64_ehdr) != 0) {
-		fprintf(stderr, "UML ELF: invalid AArch64 ET_DYN image\n");
+		set_elf_error("UML ELF: invalid AArch64 ET_DYN image");
 		return 126;
 	}
 	const auto *bytes = static_cast<const unsigned char *>(image);
@@ -533,14 +582,14 @@ private:
 	    header->phoff % alignof(uml_elf64_phdr) != 0 ||
 	    !range_inside(image_size, header->phoff,
 		static_cast<uint64_t>(header->phnum) * header->phentsize)) {
-		fprintf(stderr, "UML ELF: invalid AArch64 ET_DYN image\n");
+		set_elf_error("UML ELF: invalid AArch64 ET_DYN image");
 		return 126;
 	}
 	const auto *programs = reinterpret_cast<const uml_elf64_phdr *>(
 		bytes + header->phoff);
 	const size_t page_size = static_cast<size_t>(getpagesize());
 	if ((load_bias & (page_size - 1U)) != 0U) {
-		fprintf(stderr, "UML ELF: load bias is not host-page aligned\n");
+		set_elf_error("UML ELF: load bias is not host-page aligned");
 		return 126;
 	}
 	/* The image is the signed carrier when it is the process's own
@@ -555,8 +604,8 @@ private:
 		reinterpret_cast<uintptr_t>(image) % page_size == 0;
 #if DARWIN_UML_SIGNED_KERNEL_CARRIER
 	if (!carrier) {
-		fprintf(stderr,
-			"UML ELF: image does not match the signed kernel carrier\n");
+		set_elf_error(
+			"UML ELF: image does not match the signed kernel carrier");
 		return 126;
 	}
 #endif
@@ -577,7 +626,7 @@ private:
 		    !runtime_address(load_bias, program.vaddr, segment_begin) ||
 		    !checked_add(segment_begin, program.memsz, segment_end) ||
 		    !align_up(segment_end, page_size, page_end)) {
-			fprintf(stderr, "UML ELF: invalid load segment\n");
+			set_elf_error("UML ELF: invalid load segment");
 			return 126;
 		}
 		const auto page_begin = align_down(segment_begin, page_size);
@@ -587,7 +636,7 @@ private:
 	}
 	if (segments.empty() || maximum <= minimum ||
 	    maximum - minimum > SIZE_MAX) {
-		fprintf(stderr, "UML ELF: image has no valid loadable segments\n");
+		set_elf_error("UML ELF: image has no valid loadable segments");
 		return 126;
 	}
 	uintptr_t entry_address;
@@ -595,7 +644,7 @@ private:
 	    entry_address % alignof(uint32_t) != 0 ||
 	    !loaded_range_inside(segments, entry_address,
 		sizeof(uint32_t), UML_PF_X)) {
-		fprintf(stderr, "UML ELF: entry point is outside executable segments\n");
+		set_elf_error("UML ELF: entry point is outside executable segments");
 		return 126;
 	}
 
@@ -612,9 +661,9 @@ private:
 	 */
 	const bool in_window = window_end != 0U;
 	if (in_window && (minimum < window_start || maximum > window_end)) {
-		fprintf(stderr,
+		set_elf_error(
 			"UML ELF: kernel image %#llx..%#llx lies outside the "
-			"reserved window %#llx..%#llx\n",
+			"reserved window %#llx..%#llx",
 			static_cast<unsigned long long>(minimum),
 			static_cast<unsigned long long>(maximum),
 			static_cast<unsigned long long>(window_start),
@@ -629,13 +678,13 @@ private:
 			PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
 	Reservation reservation{mapped, reservation_length, in_window};
 	if (mapped == MAP_FAILED) {
-		perror("UML ELF mmap");
+		set_elf_errno("UML ELF: mmap");
 		return 126;
 	}
 	if (reinterpret_cast<uintptr_t>(mapped) != minimum) {
-		fprintf(stderr,
+		set_elf_error(
 			"UML ELF: preferred kernel address unavailable: "
-			"wanted %#llx..%#llx, Darwin offered %#llx\n",
+			"wanted %#llx..%#llx, Darwin offered %#llx",
 			static_cast<unsigned long long>(minimum),
 			static_cast<unsigned long long>(maximum),
 			static_cast<unsigned long long>(
@@ -667,8 +716,8 @@ private:
 			    !checked_add(static_cast<uintptr_t>(program.offset),
 				program.filesz, file_end) ||
 			    !align_up(file_end, page_size, source_end)) {
-				fprintf(stderr,
-					"UML ELF: signed text segment is not immutable\n");
+				set_elf_error(
+					"UML ELF: signed text segment is not immutable");
 				return 126;
 			}
 			const auto source_begin = align_down(
@@ -696,7 +745,7 @@ private:
 			if (write_end > write_begin &&
 			    mprotect(reinterpret_cast<void *>(write_begin),
 				write_end - write_begin, PROT_READ | PROT_WRITE) != 0) {
-				perror("UML ELF mprotect load");
+				set_elf_errno("UML ELF: mprotect load");
 				return 126;
 			}
 			const uintptr_t destination = start +
@@ -718,7 +767,7 @@ private:
 		const auto first_page = (start - minimum) / page_size;
 		const auto last_page = (end - minimum) / page_size;
 		if (last_page > page_count) {
-			fprintf(stderr, "UML ELF: segment page range is invalid\n");
+			set_elf_error("UML ELF: segment page range is invalid");
 			return 126;
 		}
 		for (size_t page = first_page; page < last_page; ++page)
@@ -735,14 +784,14 @@ private:
 		    program.filesz % sizeof(uml_elf64_dyn) != 0 ||
 		    program.vaddr % alignof(uml_elf64_dyn) != 0 ||
 		    program.filesz > SIZE_MAX) {
-			fprintf(stderr, "UML ELF: invalid dynamic segment\n");
+			set_elf_error("UML ELF: invalid dynamic segment");
 			return 126;
 		}
 		uintptr_t address;
 		if (!runtime_address(load_bias, program.vaddr, address) ||
 		    !loaded_range_inside(segments, address,
 			static_cast<size_t>(program.filesz))) {
-			fprintf(stderr, "UML ELF: dynamic segment is outside loaded data\n");
+			set_elf_error("UML ELF: dynamic segment is outside loaded data");
 			return 126;
 		}
 		dynamic = reinterpret_cast<const uml_elf64_dyn *>(address);
@@ -777,15 +826,15 @@ private:
 		    (PROT_WRITE | PROT_EXEC))
 			protection &= ~PROT_EXEC;
 		if (page == entry_page && (protection & PROT_EXEC) == 0) {
-			fprintf(stderr,
-				"UML ELF: entry page cannot be made executable safely\n");
+			set_elf_error(
+				"UML ELF: entry page cannot be made executable safely");
 			return 126;
 		}
 		if ((protection & PROT_EXEC) != 0)
 			sys_icache_invalidate(reinterpret_cast<void *>(address), page_size);
 		if (mprotect(reinterpret_cast<void *>(address), page_size,
 			protection) != 0) {
-			perror("UML ELF mprotect final");
+			set_elf_errno("UML ELF: mprotect final");
 			return 126;
 		}
 	}
@@ -810,7 +859,19 @@ extern "C" int uml_elf_run(const void *image, size_t image_size,
 		return run_elf(image, image_size, load_bias, window_start,
 			window_end, argc, argv, envp);
 	} catch (...) {
-		fprintf(stderr, "UML ELF: loader allocation or host failure\n");
+		set_elf_error("UML ELF: loader allocation or host failure");
 		return 126;
 	}
+}
+
+extern "C" size_t uml_elf_copy_last_error(char *buffer, size_t buffer_size)
+{
+	std::lock_guard lock{elf_last_error.mutex};
+	const size_t length = strlen(elf_last_error.message);
+	if (buffer != nullptr && buffer_size > 0) {
+		const size_t copy = std::min(length, buffer_size - 1U);
+		memcpy(buffer, elf_last_error.message, copy);
+		buffer[copy] = '\0';
+	}
+	return length;
 }

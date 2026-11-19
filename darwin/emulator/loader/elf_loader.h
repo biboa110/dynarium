@@ -18,6 +18,10 @@ int uml_elf_run(const void *image, size_t image_size, uintptr_t load_bias,
 		uintptr_t window_start, uintptr_t window_end,
 		int argc, char **argv, char **envp);
 
+/* Copies the last loader failure message (up to buffer_size - 1 bytes) into
+ * buffer and returns its byte length. */
+size_t uml_elf_copy_last_error(char *buffer, size_t buffer_size);
+
 #ifdef __cplusplus
 }
 #endif

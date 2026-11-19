@@ -397,13 +397,16 @@ public:
 		::uml::runtime::RunScope run_scope{runtime_};
 		if (!run_scope.entered())
 			return -UML_EMULATOR_RUNTIME_ERROR;
-		if (!power_off_pending_)
+		if (!power_off_pending_ &&
+		    !(restartable_ && ::uml::runtime::process_guest_spent()))
 			return -UML_EMULATOR_UNSUPPORTED;
 		if (!process_admission.enter(runtime_))
 			return -UML_EMULATOR_RUNTIME_ERROR;
 		const int result = hand_back_guest();
-		if (result == 0)
+		if (result == 0) {
 			power_off_pending_ = false;
+			restartable_ = false;
+		}
 		return result;
 	}
 

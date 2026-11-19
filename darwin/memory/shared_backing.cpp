@@ -783,6 +783,11 @@ bool host_range_kept(const void *address, std::size_t length) noexcept
 	return false;
 }
 
+bool has_kept_host_ranges() noexcept
+{
+	return kept_host_ranges.count.load(std::memory_order_acquire) != 0U;
+}
+
 void *map_shared_backing(void *address, std::size_t length,
 	int protection, int flags, int fd, std::uint64_t offset) noexcept
 {

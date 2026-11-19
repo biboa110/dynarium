@@ -21,6 +21,7 @@
 #include <epoxy/gl.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -420,15 +421,57 @@ VirglRenderer::VirglRenderer()
             virgl_renderer_set_device_memory_pool(nullptr);
         }
 #endif
-        const int result =
+        missingGlEntryPoint.store(false, std::memory_order_release);
+        int result =
             virgl_renderer_init(this, rendererFlags, &callbacks);
-        const int checkedResult = checkGlDispatchResult(result);
+        int checkedResult = checkGlDispatchResult(result);
+#if UML_GPU_SOFTWARE_RENDERER
+        if (checkedResult != 0) {
+            const char* drv = std::getenv("GALLIUM_DRIVER");
+            const char* drawLlvm = std::getenv("DRAW_USE_LLVM");
+            const bool alreadySafeSoftpipe =
+                drv != nullptr && std::string_view(drv) == "softpipe" &&
+                (drawLlvm == nullptr || std::string_view(drawLlvm) == "0");
+            if (!alreadySafeSoftpipe) {
+                if (result == 0)
+                    virgl_renderer_cleanup(this);
+                const std::string previousError = provider_->lastError();
+                std::fprintf(
+                    stderr,
+                    "Virgl software renderer failed under %s (%s); "
+                    "falling back to softpipe\n",
+                    drv != nullptr && *drv != '\0' ? drv : "(default)",
+                    previousError.empty() ? "no provider detail"
+                                          : previousError.c_str());
+                provider_ = std::make_unique<HostGlProvider>();
+                ::setenv("GALLIUM_DRIVER", "softpipe", 1);
+                ::setenv("DRAW_USE_LLVM", "0", 1);
+                missingGlEntryPoint.store(false, std::memory_order_release);
+                result = virgl_renderer_init(this, rendererFlags, &callbacks);
+                checkedResult = checkGlDispatchResult(result);
+            }
+        }
+#endif
         if (checkedResult != 0) {
             if (result == 0)
                 virgl_renderer_cleanup(this);
-            throw std::runtime_error(
+            std::string message =
                 "failed to initialize in-process Virgl renderer: " +
-                std::to_string(checkedResult));
+                std::to_string(checkedResult);
+#if UML_GPU_SOFTWARE_RENDERER
+            const char* activeDriver = std::getenv("GALLIUM_DRIVER");
+            message += " [driver=";
+            message += (activeDriver != nullptr && *activeDriver != '\0')
+                ? activeDriver
+                : "(default)";
+            message += "]";
+#endif
+            if (const std::string providerError = provider_->lastError();
+                !providerError.empty()) {
+                message += ": ";
+                message += providerError;
+            }
+            throw std::runtime_error(std::move(message));
         }
         initialized = true;
         if (deviceMemoryPool) {

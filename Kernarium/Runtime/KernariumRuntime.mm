@@ -41,8 +41,10 @@
 #include "block/android_boot.hpp"
 #include "block/boot_initramfs.hpp"
 #include "block/ubd_path.hpp"
+#include "elf_loader.h"
 #include "gpu_budget_plan.hpp"
 #include "options.hpp"
+#include "restart_loop_guard.hpp"
 #include "runtime/execution_engine.hpp"
 #include "uml/emulator.h"
 #include "uml_slirp_net.h"
@@ -1344,6 +1346,13 @@ public:
     void say(const std::string& message) noexcept override
     {
         std::printf("Kernarium: %s\n", message.c_str());
+        try {
+            std::string line {"[Dynarium] "};
+            line.append(message);
+            line.push_back('\n');
+            publishConsoleOutput(line.data(), line.size());
+        } catch (...) {
+        }
     }
 
     void restarting(unsigned restarts) noexcept override
@@ -1955,6 +1964,36 @@ int runtimeRun(
             dotsPerInch,
             guestMemoryMiB,
             guestProcessorCount);
+        {
+            const char* engineLabel =
+                request.jitCacheBudget != 0 ? "JIT" : "Gadget";
+#if UML_GPU_SOFTWARE_RENDERER
+            const char* gallium = std::getenv("GALLIUM_DRIVER");
+            const std::string gpuLabel =
+                (gallium != nullptr && *gallium != '\0')
+                ? gallium
+                : "softpipe";
+#else
+            const std::string gpuLabel = "Zink/KosmicKrisp";
+#endif
+            char bootLine[256] {};
+            const int written = std::snprintf(
+                bootLine,
+                sizeof(bootLine),
+                "[Dynarium] Boot: %ux%u@%uDPI mem=%uM vcpu=%u engine=%s gpu=%s\n",
+                width,
+                height,
+                dotsPerInch,
+                guestMemoryMiB,
+                guestProcessorCount,
+                engineLabel,
+                gpuLabel.c_str());
+            if (written > 0) {
+                const auto length = std::min<std::size_t>(
+                    static_cast<std::size_t>(written), sizeof(bootLine) - 1U);
+                publishConsoleOutput(bootLine, length);
+            }
+        }
 
         AppNetwork network;
         auto networkCallbacks = network.callbacks();
@@ -2086,6 +2125,49 @@ int runtimeRun(
                 const FootprintReporter footprintReporter;
 #endif
                 result = kernarium::restart::run(guest);
+            }
+        }
+        if (result == KERNARIUM_RUNTIME_RESULT_RESTART_LOOP) {
+            uml_emulator_run_end end {.struct_size = sizeof(end)};
+            std::string commandNote;
+            if (uml_emulator_get_run_end(emulator.get(), &end) ==
+                UML_EMULATOR_OK) {
+                end.restart_command[sizeof(end.restart_command) - 1U] = '\0';
+                const std::string printable =
+                    uml::emulator::printable_restart_command(
+                        end.restart_command);
+                if (!printable.empty()) {
+                    commandNote = " (lenh: '" + printable + "')";
+                }
+            }
+            int releaseResult = uml_emulator_release_guest(emulator.get());
+            for (unsigned attempt = 0;
+                 releaseResult == -UML_EMULATOR_RUNTIME_ERROR &&
+                 attempt < uml::emulator::restart_run_retries;
+                 ++attempt) {
+                std::this_thread::sleep_for(
+                    uml::emulator::restart_run_retry_delay);
+                releaseResult = uml_emulator_release_guest(emulator.get());
+            }
+            if (releaseResult != 0) {
+                recordRuntimeError(
+                    "Android khoi dong lai lien tuc 5 lan" + commandNote +
+                    "; chua thu hoi duoc vung nho nhan (release=" +
+                    std::to_string(releaseResult) + ")");
+            } else {
+                recordRuntimeError(
+                    "Android khoi dong lai lien tuc 5 lan trong 15s dau" +
+                    (commandNote.empty() ? " (khong kem ma lenh)"
+                                         : commandNote));
+            }
+        }
+        if (result == 126) {
+            char elfError[512] {};
+            if (uml_elf_copy_last_error(elfError, sizeof(elfError)) > 0) {
+                recordRuntimeError(elfError);
+            } else {
+                recordRuntimeError(
+                    "Khong the nap nhan Linux nhung (__TEXT,__uml_elf, ma 126).");
             }
         }
         if (result == -UML_EMULATOR_RUNTIME_ERROR) {

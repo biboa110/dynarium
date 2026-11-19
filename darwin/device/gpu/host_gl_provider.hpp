@@ -52,13 +52,19 @@ public:
      * transport thread: a thread may be inside a call of this provider and
      * hold the provider's lock or EGL's, so this takes no lock of either. */
     [[nodiscard]] std::uint64_t releaseCachedMemory() noexcept;
+    [[nodiscard]] std::string lastError() const;
 
 private:
+    void recordError(std::string message) noexcept;
+    void recordEglFailure(const char* operation) noexcept;
+
     // EGL display creation and context topology changes are serialized.
     // makeCurrent remains per-thread and lock-free after display publication;
     // renderer cleanup completes before this object's destructor can retire
     // that immutable display.
     std::mutex mutex_;
+    mutable std::mutex errorMutex_;
+    std::string lastError_;
     std::atomic<void*> display_ {};
     // eglReleaseCachedMemoryMESA, found on first use. A pointer found twice
     // is the same pointer.

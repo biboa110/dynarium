@@ -25,12 +25,14 @@ extern "C" {
 #include <virglrenderer.h>
 }
 
+#include <TargetConditionals.h>
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace uml::gpu {
@@ -57,14 +59,52 @@ constexpr const char* kProviderMarker =
     "Virgl Zink/KosmicKrisp provider: hardware\n";
 #endif
 
-void reportEglFailure(const char* operation) noexcept
+std::string formatEglFailure(
+    const char* operation,
+    unsigned int errorCode)
 {
-    std::fprintf(
-        stderr,
-        "%s EGL %s failed: 0x%04x\n",
+    char buffer[256] {};
+#if UML_GPU_SOFTWARE_RENDERER
+    const char* driver = std::getenv("GALLIUM_DRIVER");
+    const char* llvm = std::getenv("DRAW_USE_LLVM");
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%s EGL %s failed: 0x%04x [GALLIUM_DRIVER=%s, DRAW_USE_LLVM=%s]",
         kProviderName,
         operation,
-        static_cast<unsigned int>(eglGetError()));
+        errorCode,
+        driver != nullptr && *driver != '\0' ? driver : "(default)",
+        llvm != nullptr && *llvm != '\0' ? llvm : "(unset)");
+#else
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "%s EGL %s failed: 0x%04x",
+        kProviderName,
+        operation,
+        errorCode);
+#endif
+    return std::string(buffer);
+}
+
+std::string reportEglFailure(
+    const char* operation,
+    unsigned int errorCode = static_cast<unsigned int>(eglGetError())) noexcept
+{
+    try {
+        std::string message = formatEglFailure(operation, errorCode);
+        std::fprintf(stderr, "%s\n", message.c_str());
+        return message;
+    } catch (...) {
+        std::fprintf(
+            stderr,
+            "%s EGL %s failed: 0x%04x\n",
+            kProviderName,
+            operation,
+            errorCode);
+        return {};
+    }
 }
 
 // The rendering API an EGL thread is bound to is per-thread state whose
@@ -74,11 +114,13 @@ void reportEglFailure(const char* operation) noexcept
 // guest queue, and a GLES request cannot share with this provider's desktop
 // contexts: EGL answers EGL_BAD_MATCH. Select the API on each thread that
 // reaches EGL instead.
-bool bindClientApi() noexcept
+bool bindClientApi(std::string* errorOut = nullptr) noexcept
 {
     if (eglBindAPI(kClientApi) == EGL_TRUE)
         return true;
-    reportEglFailure("API binding");
+    auto message = reportEglFailure("API binding");
+    if (errorOut != nullptr)
+        *errorOut = std::move(message);
     return false;
 }
 
@@ -106,16 +148,18 @@ bool hasExtension(const char* extensions, std::string_view name) noexcept
 // keyed by an explicit device is one such a client never obtains. Apple hosts
 // have no DRM devices, so Mesa's surfaceless platform renders zink on its
 // software device, and that is the device to name.
-EGLDeviceEXT softwareDevice()
+EGLDeviceEXT softwareDevice(std::string* errorOut = nullptr)
 {
     const char* clientExtensions =
         eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
     if (!hasExtension(clientExtensions, "EGL_EXT_device_enumeration") ||
         !hasExtension(clientExtensions, "EGL_EXT_explicit_device")) {
-        std::fprintf(
-            stderr,
-            "%s EGL offers no explicit device selection\n",
-            kProviderName);
+        std::string message =
+            std::string(kProviderName) +
+            " EGL offers no explicit device selection";
+        std::fprintf(stderr, "%s\n", message.c_str());
+        if (errorOut != nullptr)
+            *errorOut = std::move(message);
         return EGL_NO_DEVICE_EXT;
     }
     const auto queryDevices = reinterpret_cast<PFNEGLQUERYDEVICESEXTPROC>(
@@ -126,12 +170,16 @@ EGLDeviceEXT softwareDevice()
     EGLint count = 0;
     if (queryDevices == nullptr || queryDeviceString == nullptr ||
         queryDevices(0, nullptr, &count) != EGL_TRUE || count <= 0) {
-        reportEglFailure("device enumeration");
+        auto message = reportEglFailure("device enumeration");
+        if (errorOut != nullptr)
+            *errorOut = std::move(message);
         return EGL_NO_DEVICE_EXT;
     }
     std::vector<EGLDeviceEXT> devices(static_cast<std::size_t>(count));
     if (queryDevices(count, devices.data(), &count) != EGL_TRUE) {
-        reportEglFailure("device enumeration");
+        auto message = reportEglFailure("device enumeration");
+        if (errorOut != nullptr)
+            *errorOut = std::move(message);
         return EGL_NO_DEVICE_EXT;
     }
     devices.resize(static_cast<std::size_t>(std::max(count, 0)));
@@ -142,7 +190,11 @@ EGLDeviceEXT softwareDevice()
             return device;
         }
     }
-    std::fprintf(stderr, "%s EGL has no software device\n", kProviderName);
+    std::string message =
+        std::string(kProviderName) + " EGL has no software device";
+    std::fprintf(stderr, "%s\n", message.c_str());
+    if (errorOut != nullptr)
+        *errorOut = std::move(message);
     return EGL_NO_DEVICE_EXT;
 }
 
@@ -154,6 +206,28 @@ std::string glString(GLenum name)
 }
 
 } // namespace
+
+std::string HostGlProvider::lastError() const
+{
+    std::lock_guard lock(errorMutex_);
+    return lastError_;
+}
+
+void HostGlProvider::recordError(std::string message) noexcept
+{
+    try {
+        if (message.empty())
+            return;
+        std::lock_guard lock(errorMutex_);
+        lastError_ = std::move(message);
+    } catch (...) {
+    }
+}
+
+void HostGlProvider::recordEglFailure(const char* operation) noexcept
+{
+    recordError(reportEglFailure(operation));
+}
 
 HostGlProvider::~HostGlProvider()
 {
@@ -176,11 +250,18 @@ void* HostGlProvider::display() noexcept
 {
     try {
         std::lock_guard lock(mutex_);
-        if (!bindClientApi())
+        std::string stepError;
+        if (!bindClientApi(&stepError)) {
+            recordError(std::move(stepError));
             return nullptr;
+        }
         if (void* publishedDisplay =
                 display_.load(std::memory_order_acquire)) {
             return publishedDisplay;
+        }
+        {
+            std::lock_guard errorLock(errorMutex_);
+            lastError_.clear();
         }
         // Mesa selects its Gallium driver from the process environment before
         // the display is created, and the packaged provider offers exactly one
@@ -194,19 +275,26 @@ void* HostGlProvider::display() noexcept
             ::setenv(kDriverOverrideVariable, kDriverOverride, 1);
         }
 #if UML_GPU_SOFTWARE_RENDERER
+#if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
+        if (const char* galliumDriver = std::getenv("GALLIUM_DRIVER");
+            galliumDriver == nullptr || *galliumDriver == '\0') {
+            ::setenv("GALLIUM_DRIVER", "softpipe", 1);
+        }
+#endif
         // When the caller selects Mesa softpipe on a non-JIT Darwin host,
         // Gallium's draw module must also stay off LLVM so vertex shading
         // never attempts unsigned PROT_EXEC JIT emission.
         if (const char* galliumDriver = std::getenv("GALLIUM_DRIVER");
             galliumDriver != nullptr &&
-            std::string_view(galliumDriver) == "softpipe" &&
-            std::getenv("DRAW_USE_LLVM") == nullptr) {
-            ::setenv("DRAW_USE_LLVM", "0", 0);
+            std::string_view(galliumDriver) == "softpipe") {
+            ::setenv("DRAW_USE_LLVM", "0", 1);
         }
 #endif
-        const EGLDeviceEXT device = softwareDevice();
-        if (device == EGL_NO_DEVICE_EXT)
+        const EGLDeviceEXT device = softwareDevice(&stepError);
+        if (device == EGL_NO_DEVICE_EXT) {
+            recordError(std::move(stepError));
             return nullptr;
+        }
         const EGLAttrib displayAttributes[] {
             EGL_DEVICE_EXT, reinterpret_cast<EGLAttrib>(device),
             EGL_NONE,
@@ -214,13 +302,13 @@ void* HostGlProvider::display() noexcept
         const auto eglDisplay = eglGetPlatformDisplay(
             EGL_PLATFORM_SURFACELESS_MESA, nullptr, displayAttributes);
         if (eglDisplay == EGL_NO_DISPLAY) {
-            reportEglFailure("display creation");
+            recordEglFailure("display creation");
             return nullptr;
         }
         EGLint major = 0;
         EGLint minor = 0;
         if (eglInitialize(eglDisplay, &major, &minor) != EGL_TRUE) {
-            reportEglFailure("initialization");
+            recordEglFailure("initialization");
             (void)eglTerminate(eglDisplay);
             return nullptr;
         }
@@ -242,15 +330,30 @@ void* HostGlProvider::display() noexcept
                 1,
                 &count) != EGL_TRUE ||
             count != 1 || eglConfig == nullptr) {
-            reportEglFailure("configuration selection");
-            (void)eglTerminate(eglDisplay);
-            return nullptr;
+            const auto configError = static_cast<unsigned int>(eglGetError());
+            const char* displayExtensions =
+                eglQueryString(eglDisplay, EGL_EXTENSIONS);
+            if (hasExtension(displayExtensions, "EGL_KHR_no_config_context")) {
+                std::fprintf(
+                    stderr,
+                    "%s EGL configuration selection unavailable (0x%04x); "
+                    "using EGL_KHR_no_config_context\n",
+                    kProviderName,
+                    configError);
+                eglConfig = nullptr;
+            } else {
+                recordError(
+                    reportEglFailure("configuration selection", configError));
+                (void)eglTerminate(eglDisplay);
+                return nullptr;
+            }
         }
         config_ = eglConfig;
         std::fputs(kProviderMarker, stderr);
         display_.store(eglDisplay, std::memory_order_release);
         return eglDisplay;
     } catch (...) {
+        recordError(std::string(kProviderName) + " display setup threw an exception");
         return nullptr;
     }
 }
@@ -393,6 +496,17 @@ void* HostGlProvider::createContext(
         if (parameters.version != 2 || parameters.compat_ctx ||
             parameters.major_ver < 3 ||
             parameters.major_ver > 4) {
+            char buffer[160] {};
+            std::snprintf(
+                buffer,
+                sizeof(buffer),
+                "%s unsupported GL context parameters (version=%d, %d.%d, compat=%d)",
+                kProviderName,
+                parameters.version,
+                parameters.major_ver,
+                parameters.minor_ver,
+                parameters.compat_ctx);
+            recordError(buffer);
             return nullptr;
         }
         // display() also binds the calling thread to the desktop API, which a
@@ -406,8 +520,12 @@ void* HostGlProvider::createContext(
         EGLContext shared = EGL_NO_CONTEXT;
         if (parameters.shared) {
             shared = static_cast<EGLContext>(sharedContext_);
-            if (shared == EGL_NO_CONTEXT)
+            if (shared == EGL_NO_CONTEXT) {
+                recordError(
+                    std::string(kProviderName) +
+                    " shared GL context requested before base context");
                 return nullptr;
+            }
         }
         const EGLint attributes[] {
             EGL_CONTEXT_MAJOR_VERSION_KHR,
@@ -421,13 +539,23 @@ void* HostGlProvider::createContext(
         const auto context = eglCreateContext(
             eglDisplay, eglConfig, shared, attributes);
         if (context == EGL_NO_CONTEXT) {
-            reportEglFailure("context creation");
+            const auto ctxError = static_cast<unsigned int>(eglGetError());
+            char operation[64] {};
+            std::snprintf(
+                operation,
+                sizeof(operation),
+                "context creation (%d.%d%s)",
+                parameters.major_ver,
+                parameters.minor_ver,
+                parameters.shared ? ", shared" : "");
+            recordError(reportEglFailure(operation, ctxError));
             return nullptr;
         }
         if (!parameters.shared)
             sharedContext_ = context;
         return context;
     } catch (...) {
+        recordError(std::string(kProviderName) + " createContext threw an exception");
         return nullptr;
     }
 }
