@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: Dynarium
+options:
+  bundleIdPrefix: com.dynarium
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+  minimumXcodeGenVersion: "2.38.0"
+  createIntermediateGroups: true
+  defaultConfig: Release
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+
+packages:
+  GuestHostCore:
+    path: ../GuestHost/Core
+
+targets:
+  Dynarium:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources
+      - path: Resources
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      - path: ../GuestHost/Sources
+        excludes:
+          - "*.h"
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CLANG_CXX_LANGUAGE_STANDARD: c++20
+        CODE_SIGN_ENTITLEMENTS: Config/Dynarium.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_LANGUAGE: vi
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../.build/kernarium-xcframeworks
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_FILE: Config/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Dynarium
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Các ứng dụng Android trong Dynarium sử dụng quyền này để kết nối thiết bị trong mạng LAN hoặc bật ADB qua Wi-Fi."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Dynarium chỉ thu âm micro khi bạn bật quyền Micro trong phiên chạy máy ảo Android."
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "NO"
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@executable_path/Frameworks"
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -lz
+        PRODUCT_BUNDLE_IDENTIFIER: com.dynarium.app
+        PRODUCT_NAME: Dynarium
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SUPPORTS_MACCATALYST: "NO"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "YES"
+        SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_OBJC_BRIDGING_HEADER: Config/Dynarium-Bridging-Header.h
+        SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: "YES"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: GuestHostCore
+      - framework: ../.build/kernarium-xcframeworks/KRuntime_Android_6_18_4K.xcframework
+        embed: true
+        codeSign: true
+        removeHeaders: true
+      - framework: ../.build/kernarium-xcframeworks/MesaEGL.xcframework
+        embed: true
+        codeSign: true
+        removeHeaders: true
+      - framework: ../.build/kernarium-xcframeworks/MesaGallium.xcframework
+        embed: true
+        codeSign: true
+        removeHeaders: true
+      - framework: ../.build/kernarium-xcframeworks/LibZstd.xcframework
+        embed: false
+      - sdk: AVFoundation.framework
+      - sdk: AVKit.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: Security.framework
+      - sdk: UniformTypeIdentifiers.framework
+    postBuildScripts:
+      - name: Embed KosmicKrisp (device Metal 4 edition only)
+        basedOnDependencyAnalysis: false
+        shell: /bin/sh
+        script: |
+          if [ -d "$SRCROOT/../.build/kernarium-xcframeworks/KosmicKrisp.xcframework" ]; then
+            "$SRCROOT/../Kernarium/scripts/embed-device-framework.sh" \
+              "$SRCROOT/../.build/kernarium-xcframeworks/KosmicKrisp.xcframework"
+          fi

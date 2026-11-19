@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Unsigned CI / local signing config. Place your personal Apple Team ID in
+// an ignored Signing.local.xcconfig beside this file (never commit it).
+
+#include "Version.xcconfig"
+
+DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"

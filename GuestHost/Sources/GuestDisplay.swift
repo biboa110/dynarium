@@ -94,16 +94,18 @@ final class GuestDisplayViewController: UIViewController {
         super.viewDidAppear(animated)
         guard sceneGeometryObservation == nil,
               let scene = view.window?.windowScene else { return }
-        // An interactive window resize reports no transition of its own to
-        // hold across, so the scene's geometry says when the gesture runs.
-        sceneGeometryObservation = scene.observe(
-            \.effectiveGeometry, options: [.initial, .new]
-        ) { [weak self] scene, _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.perform(self.resizeHold.interactiveResizeChanged(
-                    scene.effectiveGeometry.isInteractivelyResizing
-                ))
+        if #available(iOS 26.0, *) {
+            // An interactive window resize reports no transition of its own to
+            // hold across, so the scene's geometry says when the gesture runs.
+            sceneGeometryObservation = scene.observe(
+                \.effectiveGeometry, options: [.initial, .new]
+            ) { [weak self] scene, _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.perform(self.resizeHold.interactiveResizeChanged(
+                        scene.effectiveGeometry.isInteractivelyResizing
+                    ))
+                }
             }
         }
     }

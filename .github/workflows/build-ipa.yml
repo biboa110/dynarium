@@ -1,0 +1,419 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Build & Release Dynarium IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - 'PLAN.md'
+      - 'README.md'
+      - 'CREDITS.md'
+      - 'AGENTS.md'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+  checks: write
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios16-ipa:
+    name: Build Dynarium Universal (iOS 16.0+)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify host, LF line endings, license headers & source audit
+        run: |
+          uname -a
+          xcodebuild -version
+          [ "$(uname -m)" = "arm64" ]
+          python3 - <<'EOF'
+          import pathlib, subprocess, sys
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          exts = {".sh", ".py", ".tsv", ".cmake", ".yml", ".yaml", ".json", ".swift", ".h", ".plist", ".xcconfig"}
+          names = {"CMakeLists.txt", "CMakePresets.json", ".gitattributes", ".gitignore"}
+          bad = []
+          for rel in tracked:
+              p = pathlib.Path(rel)
+              if rel.startswith("dependencies/patches/"):
+                  continue
+              if p.suffix in exts or p.name in names:
+                  data = p.read_bytes()
+                  if b"\r" in data or data.startswith(b"\xef\xbb\xbf"):
+                      bad.append(rel)
+          if bad:
+              sys.exit(f"CRLF or BOM found in: {bad}")
+          print("Line ending and BOM check passed.")
+          EOF
+          cmake -DSOURCE_ROOT="$PWD" -P scripts/audit-source-tree.cmake
+          python3 -B tests/tooling/cmake/check_license_headers.py --source-root "$PWD"
+
+      - name: Install build & packaging tools
+        run: |
+          brew install cmake ninja xcodegen ldid
+
+      - name: Restore prebuilt iOS 16 dependencies (deps-ios16-latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          log=$(mktemp)
+          if (
+            mkdir -p .build
+            gh release download deps-ios16-latest -p dynarium-deps-ios16-arm64.tar.gz -D .build --clobber
+            tar -xzf .build/dynarium-deps-ios16-arm64.tar.gz -C .build
+            rm -f .build/dynarium-deps-ios16-arm64.tar.gz
+            ./dependencies/build-ios-zstd.sh --verify-only
+            ./dependencies/build-ios-storage.sh --verify-only
+            ./dependencies/build-ios-network.sh --platform ios --verify-only
+            ./dependencies/build-apple-gpu.sh --platform ios --verify-only
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: restore-deps-ios16 (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: restore-deps-ios16"; echo '````text'; tail -n 80 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Download accepted Android 6.18 4K kernel artifact
+        run: |
+          mkdir -p .build/kernel/artifacts .build/kernel/tmp
+          curl -fL --retry 3 \
+            -o .build/kernel/tmp/android-kernel.tar.gz \
+            https://github.com/imxieyi/Kernarium/releases/download/1.0b9-beta/android-6.18-arm64-4k-20261111-6.18.60-mc2.tar.gz
+          tar -xzf .build/kernel/tmp/android-kernel.tar.gz -C .build/kernel/tmp
+          bundle_dir=".build/kernel/artifacts/android-6.18-arm64-4k-20261111-6.18.60-mc2"
+          if [ -d ".build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2/kernel" ]; then
+            mv .build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2 "$bundle_dir"
+          elif [ -d ".build/kernel/tmp/kernel" ]; then
+            mkdir -p "$bundle_dir"
+            mv .build/kernel/tmp/* "$bundle_dir/" || true
+          else
+            echo "Unexpected Android kernel archive layout" >&2
+            exit 1
+          fi
+          rm -rf .build/kernel/tmp
+          test -f "$bundle_dir/kernel/vmlinux"
+
+      - name: Build KernariumRuntime (Android 17, iOS 16.0) & package XCFrameworks
+        run: |
+          log=$(mktemp)
+          if (
+            cmake --preset kernarium-ios-device-android
+            cmake --build --preset kernarium-ios-device-android
+            ./Dynarium/scripts/package-dynarium-frameworks.sh --tier ios16-universal
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: runtime-and-frameworks-ios16 (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: runtime-and-frameworks-ios16"; echo '````text'; tail -n 100 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Generate Xcode project, compile Dynarium (iOS 16.0) & package IPA
+        run: |
+          log=$(mktemp)
+          if (
+            (CDPATH= cd -- "$PWD/Dynarium" && xcodegen generate)
+            xcodebuild \
+              -project Dynarium/Dynarium.xcodeproj \
+              -scheme Dynarium \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath .build/xcode-ios16 \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+              build
+            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//')
+            ./Dynarium/scripts/package-ipa.sh \
+              --app .build/xcode-ios16/Build/Products/Release-iphoneos/Dynarium.app \
+              --output "artifacts/Dynarium-v${VERSION}.ipa" \
+              --expected-minos 16.0
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: xcodebuild-and-ipa-ios16 (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: xcodebuild-and-ipa-ios16"; echo '````text'; tail -n 120 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Upload Universal iOS 16+ IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynarium-ipa-ios16
+          path: artifacts/Dynarium-v*.ipa
+          retention-days: 30
+
+      - name: Publish failure diagnostics check-run (iOS 16)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib, subprocess
+          p = pathlib.Path("/tmp/ci-failure.log")
+          text = p.read_text(encoding="utf-8", errors="replace")[-60000:] if p.exists() else "Step failed outside wrapped log capture."
+          payload = {
+              "name": "ci-failure-diagnostics-ios16",
+              "head_sha": os.environ["GITHUB_SHA"],
+              "status": "completed",
+              "conclusion": "failure",
+              "output": {
+                  "title": "iOS 16 IPA CI Failure Log",
+                  "summary": "```text\n" + text + "\n```",
+              },
+          }
+          subprocess.run(
+              ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/check-runs", "--input", "-"],
+              input=json.dumps(payload),
+              text=True,
+              check=False,
+          )
+          EOF
+
+  build-ios26-metal4-ipa:
+    name: Build Dynarium Metal 4 (iOS 26.0+)
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build & packaging tools
+        run: |
+          brew install cmake ninja meson pkg-config autoconf automake libtool gettext xcodegen ldid
+          python3 -m venv .build/gpu-tools-venv
+          .build/gpu-tools-venv/bin/pip install --upgrade pip meson mako pyyaml packaging
+
+      - name: Restore core iOS dependencies (deps-ios16-latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .build
+          gh release download deps-ios16-latest -p dynarium-deps-ios16-arm64.tar.gz -D .build --clobber
+          tar -xzf .build/dynarium-deps-ios16-arm64.tar.gz -C .build
+          rm -f .build/dynarium-deps-ios16-arm64.tar.gz
+          ./dependencies/build-ios-zstd.sh --verify-only
+          ./dependencies/build-ios-storage.sh --verify-only
+          ./dependencies/build-ios-network.sh --platform ios --verify-only
+
+      - name: Cache dependency Git fetches and Metal 4 Vulkan GPU prefix
+        id: metal4-gpu-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/dependency-cache
+            .build/dependencies/apple-gpu-vulkan-experiment-26/ios-device-arm64
+          key: gpu-vulkan26-v1-ios-${{ hashFiles('dependencies/manifest.tsv', 'dependencies/platforms/ios-device-gpu-vulkan-arm64.tsv', 'dependencies/build-apple-gpu*.sh', 'dependencies/cmake/VerifyAppleGpuPrefix.cmake', 'dependencies/patches/mesa/**', 'dependencies/patches/virglrenderer/**', 'dependencies/patches/libepoxy/**') }}
+
+      - name: Build Apple GPU Metal 4 (Vulkan / KosmicKrisp) prefix
+        run: |
+          log=$(mktemp)
+          if (
+            PREFIX_VULKAN="$PWD/.build/dependencies/apple-gpu-vulkan-experiment-26/ios-device-arm64"
+            if [ ! -f "$PREFIX_VULKAN/share/uml-dependencies/ios-device-gpu-vulkan-arm64.tsv" ]; then
+              ./dependencies/prepare.sh --product apple-gpu-vulkan-experiment
+              UML_MESA_PYTHON="$PWD/.build/gpu-tools-venv/bin/python3" \
+              UML_IOS_DEPLOYMENT_TARGET=26.0 \
+                ./dependencies/build-apple-gpu.sh \
+                  --platform ios \
+                  --renderer vulkan \
+                  --prefix "$PREFIX_VULKAN" \
+                  --jobs 4
+            fi
+            UML_IOS_DEPLOYMENT_TARGET=26.0 \
+              ./dependencies/build-apple-gpu.sh \
+                --platform ios \
+                --renderer vulkan \
+                --prefix "$PREFIX_VULKAN" \
+                --verify-only
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: build-metal4-gpu-prefix (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: build-metal4-gpu-prefix"; echo '````text'; tail -n 100 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Download accepted Android 6.18 4K kernel artifact
+        run: |
+          mkdir -p .build/kernel/artifacts .build/kernel/tmp
+          curl -fL --retry 3 \
+            -o .build/kernel/tmp/android-kernel.tar.gz \
+            https://github.com/imxieyi/Kernarium/releases/download/1.0b9-beta/android-6.18-arm64-4k-20261111-6.18.60-mc2.tar.gz
+          tar -xzf .build/kernel/tmp/android-kernel.tar.gz -C .build/kernel/tmp
+          bundle_dir=".build/kernel/artifacts/android-6.18-arm64-4k-20261111-6.18.60-mc2"
+          if [ -d ".build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2/kernel" ]; then
+            mv .build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2 "$bundle_dir"
+          elif [ -d ".build/kernel/tmp/kernel" ]; then
+            mkdir -p "$bundle_dir"
+            mv .build/kernel/tmp/* "$bundle_dir/" || true
+          else
+            echo "Unexpected Android kernel archive layout" >&2
+            exit 1
+          fi
+          rm -rf .build/kernel/tmp
+          test -f "$bundle_dir/kernel/vmlinux"
+
+      - name: Build KernariumRuntime (Android 17, iOS 26.0 Metal 4) & package XCFrameworks
+        run: |
+          log=$(mktemp)
+          if (
+            cmake --preset kernarium-ios-device-android \
+              -B .build/kernarium-runtime-ios26-android-4k \
+              -DUML_APPLE_DEPLOYMENT_TARGET=26.0 \
+              -DUML_APPLE_GPU_DEPENDENCY_PREFIX="$PWD/.build/dependencies/apple-gpu-vulkan-experiment-26/ios-device-arm64"
+            cmake --build .build/kernarium-runtime-ios26-android-4k \
+              --target KernariumRuntime architecture-audit
+            ./Dynarium/scripts/package-dynarium-frameworks.sh --tier ios26-metal4
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: runtime-and-frameworks-metal4 (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: runtime-and-frameworks-metal4"; echo '````text'; tail -n 100 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Generate Xcode project, compile Dynarium (Metal 4 iOS 26) & package IPA
+        run: |
+          log=$(mktemp)
+          if (
+            (CDPATH= cd -- "$PWD/Dynarium" && xcodegen generate)
+            xcodebuild \
+              -project Dynarium/Dynarium.xcodeproj \
+              -scheme Dynarium \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath .build/xcode-ios26 \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              IPHONEOS_DEPLOYMENT_TARGET=26.0 \
+              build
+            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//')
+            ./Dynarium/scripts/package-ipa.sh \
+              --app .build/xcode-ios26/Build/Products/Release-iphoneos/Dynarium.app \
+              --output "artifacts/Dynarium-v${VERSION}-Metal4-iOS26.ipa" \
+              --expected-minos 26.0
+          ) >"$log" 2>&1; then
+            cat "$log"; rm -f "$log"
+          else
+            rc=$?; cat "$log"
+            { printf '=== FAILED: xcodebuild-and-ipa-metal4 (exit %s) ===\n' "$rc"; cat "$log"; } > /tmp/ci-failure.log
+            { echo "### Failed: xcodebuild-and-ipa-metal4"; echo '````text'; tail -n 120 "$log"; echo '````'; } >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$log"; exit "$rc"
+          fi
+
+      - name: Upload Metal 4 iOS 26+ IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynarium-ipa-metal4
+          path: artifacts/Dynarium-v*-Metal4-iOS26.ipa
+          retention-days: 30
+
+      - name: Publish failure diagnostics check-run (Metal 4)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib, subprocess
+          p = pathlib.Path("/tmp/ci-failure.log")
+          text = p.read_text(encoding="utf-8", errors="replace")[-60000:] if p.exists() else "Step failed outside wrapped log capture."
+          payload = {
+              "name": "ci-failure-diagnostics-metal4",
+              "head_sha": os.environ["GITHUB_SHA"],
+              "status": "completed",
+              "conclusion": "failure",
+              "output": {
+                  "title": "iOS 26 Metal 4 IPA CI Failure Log",
+                  "summary": "```text\n" + text + "\n```",
+              },
+          }
+          subprocess.run(
+              ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/check-runs", "--input", "-"],
+              input=json.dumps(payload),
+              text=True,
+              check=False,
+          )
+          EOF
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-ios16-ipa, build-ios26-metal4-ipa]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built IPA artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums and publish Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//' | tr -d ' \r\n')
+          TAG="v${VERSION}"
+          (
+            CDPATH= cd -- release-assets
+            sha256sum *.ipa > SHA256SUMS.txt
+            cat SHA256SUMS.txt
+          )
+          NOTES_FILE=$(mktemp)
+          python3 - "$TAG" "$NOTES_FILE" <<'PYEOF'
+          import pathlib, sys
+          tag, notes_path = sys.argv[1], sys.argv[2]
+          notes = f"""# Dynarium {tag} — Hypervisor Android 17 (LineageOS 24) cho iOS & iPadOS
+
+          ## Chọn phiên bản `.ipa` phù hợp thiết bị
+
+          1. **`Dynarium-{tag}.ipa` (Universal • iOS 16.0 – iOS 27+):**
+             - Tương thích rộng mọi iPhone/iPad chạy **iOS 16.0 trở lên** (AltStore, SideStore, TrollStore).
+             - Tự động chọn **Mesa `softpipe`** an toàn trên máy chưa kích hoạt JIT và nâng lên **`llvmpipe`** khi phát hiện JIT/Debugger.
+          2. **`Dynarium-{tag}-Metal4-iOS26.ipa` (Metal 4 Hardware • iOS 26.0+ A14/M1+):**
+             - Tăng tốc phần cứng **Vulkan 1.4 / GLES 3.2** qua **KosmicKrisp + Mesa Zink** dành riêng cho **iOS 26.0+** trên chip A14 / M1 trở lên.
+
+          ## Hướng dẫn thiết lập nhanh (Mô hình VMware)
+
+          1. Cài file `.ipa` tương ứng qua TrollStore / AltStore / SideStore.
+          2. Mở tab **Kho ROM** -> bấm **Tải về ngay (1 chạm)** để tải LineageOS 24 (Android 17) hoặc nhập tệp `.tar.gz` / `.tar.zst` có sẵn.
+          3. Sang tab **Máy ảo** -> bấm **+** tạo máy ảo mới, cấu hình RAM/vCPU theo mức đề xuất và khởi động.
+          4. Trong phiên chạy, dùng thanh công cụ nổi để **Cài APK / APKS / APKM**, mở **PiP** hoặc bật **AFK Eco Mode**.
+
+          > Ghi công cốt lõi: xây dựng trên nền tảng [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) và cảm hứng từ [`ish-app/ish`](https://github.com/ish-app/ish).
+          """
+          import textwrap
+          pathlib.Path(notes_path).write_text(textwrap.dedent(notes), encoding="utf-8")
+          PYEOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "Dynarium ${TAG}" --notes-file "$NOTES_FILE" --prerelease=false
+            gh release upload "$TAG" release-assets/*.ipa release-assets/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" release-assets/*.ipa release-assets/SHA256SUMS.txt \
+              --title "Dynarium ${TAG}" \
+              --notes-file "$NOTES_FILE"
+          fi
+          rm -f "$NOTES_FILE"

@@ -56,8 +56,18 @@ CMakeUserPresets.json
 /kernel/source-location.conf
 /kernel/mainline-6.18/source-location.conf
 
-# Dynarium XcodeGen & IPA packaging outputs
+# Dynarium XcodeGen, local secrets & IPA packaging outputs
 /Dynarium/*.xcodeproj/
 /Dynarium/Config/Signing.local.xcconfig
-/*.ipa
+*.local.xcconfig
+*.ipa
+*.xcarchive/
+DerivedData/
+.swiftpm/
+*.p12
+*.mobileprovision
+*.cer
+*.tar.gz
+*.tar.zst
 /artifacts/
+/scratch/
