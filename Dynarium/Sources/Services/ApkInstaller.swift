@@ -1,7 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import Combine
+import Darwin
 import Foundation
+import GuestHostCore
+
+private nonisolated final class ApkFileCoordinatorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let coordinator = NSFileCoordinator()
+
+    var current: NSFileCoordinator { coordinator }
+
+    func cancel() {
+        lock.withLock { coordinator.cancel() }
+    }
+}
 
 nonisolated enum ApkInstallState: Equatable, Sendable {
     case idle
@@ -61,10 +74,21 @@ final class ApkInstaller: ObservableObject {
 
     private var activeTask: Task<Void, Never>?
     private var activeSession: AdbSession?
+    private var activeCoordinator: ApkFileCoordinatorBox?
+
+    private static let supportedExtensions: Set<String> = ["apk", "apks", "apkm", "xapk", "zip"]
 
     func install(fileURL: URL, vmID: UUID, clock: AdbRunClock) {
         guard !state.isBusy else { return }
-        state = .preparing(fileURL.lastPathComponent)
+        let ext = fileURL.pathExtension.lowercased()
+        guard Self.supportedExtensions.contains(ext) else {
+            state = .failed("Định dạng tệp \(fileURL.lastPathComponent) không được hỗ trợ. Hãy chọn tệp .apk, .apks, .apkm, .xapk hoặc .zip.")
+            return
+        }
+
+        let coordinator = ApkFileCoordinatorBox()
+        activeCoordinator = coordinator
+        state = .preparing("Đang đọc tệp \(fileURL.lastPathComponent) từ Tệp / iCloud\u{2026}")
 
         activeTask = Task {
             let scoped = fileURL.startAccessingSecurityScopedResource()
@@ -76,6 +100,7 @@ final class ApkInstaller: ObservableObject {
                     fileURL: fileURL,
                     vmID: vmID,
                     clock: clock,
+                    coordinator: coordinator,
                     onSession: { [weak self] session in
                         Task { @MainActor [weak self] in self?.activeSession = session }
                     },
@@ -93,12 +118,14 @@ final class ApkInstaller: ObservableObject {
             } catch {
                 state = .failed(error.localizedDescription)
             }
+            activeCoordinator = nil
             activeSession = nil
             activeTask = nil
         }
     }
 
     func cancel() {
+        activeCoordinator?.cancel()
         activeSession?.cancel()
         activeTask?.cancel()
     }
@@ -113,21 +140,60 @@ final class ApkInstaller: ObservableObject {
         fileURL: URL,
         vmID: UUID,
         clock: AdbRunClock,
+        coordinator: ApkFileCoordinatorBox,
         onSession: @escaping @Sendable (AdbSession) -> Void,
         onState: @escaping @Sendable (ApkInstallState) -> Void
     ) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
-            let identity = try AdbKeyStore.forVM(vmID).loadOrCreate()
-            let session = AdbSession(signer: identity.signer, clock: clock)
-            onSession(session)
+            var installResult: Result<String, Error>?
+            var coordinationError: NSError?
 
-            let ext = fileURL.pathExtension.lowercased()
-            if ext == "apk" {
-                return try installSingleApk(url: fileURL, session: session, onState: onState)
-            } else {
-                return try installSplitBundle(url: fileURL, session: session, onState: onState)
+            coordinator.current.coordinate(readingItemAt: fileURL, options: [], error: &coordinationError) { readableURL in
+                installResult = Result {
+                    try Task.checkCancellation()
+                    try validateZipMagic(at: readableURL)
+
+                    let identity = try AdbKeyStore.forVM(vmID).loadOrCreate()
+                    let session = AdbSession(signer: identity.signer, clock: clock)
+                    onSession(session)
+
+                    let ext = readableURL.pathExtension.lowercased()
+                    if ext == "apk" {
+                        return try installSingleApk(url: readableURL, session: session, onState: onState)
+                    } else {
+                        return try installSplitBundle(url: readableURL, session: session, onState: onState)
+                    }
+                }
             }
+
+            if let coordinationError {
+                throw coordinationError
+            }
+            try Task.checkCancellation()
+            guard let installResult else {
+                throw CancellationError()
+            }
+            return try installResult.get()
         }.value
+    }
+
+    nonisolated private static func validateZipMagic(at url: URL) throws {
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+        guard size >= 4 else {
+            throw NSError(domain: "Dynarium.ApkInstaller", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Tệp \(url.lastPathComponent) rỗng hoặc tải chưa hoàn tất."
+            ])
+        }
+        let fh = try FileHandle(forReadingFrom: url)
+        defer { try? fh.close() }
+        let magic = try fh.read(upToCount: 4) ?? Data()
+        guard magic.count == 4,
+              magic[0] == 0x50, magic[1] == 0x4B, magic[2] == 0x03, magic[3] == 0x04 else {
+            throw NSError(domain: "Dynarium.ApkInstaller", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Tệp \(url.lastPathComponent) không phải gói APK/ZIP hợp lệ (hoặc tải chưa hoàn tất)."
+            ])
+        }
     }
 
     nonisolated private static func installSingleApk(
@@ -142,9 +208,11 @@ final class ApkInstaller: ObservableObject {
                 NSLocalizedDescriptionKey: "Tệp APK rỗng hoặc không hợp lệ."
             ])
         }
+        let totalLabel = Formats.size(bytes: UInt64(size))
         try session.run { conn in
-            try streamSingleApkToAbb(handleURL: url, size: size, connection: conn, watchdog: session.watchdog) { prog in
-                onState(.transferring(detail: url.lastPathComponent, progress: prog * 0.85))
+            try streamSingleApkToAbb(handleURL: url, size: size, connection: conn, watchdog: session.watchdog, onState: onState) { sent in
+                let frac = min(max(Double(sent) / Double(size), 0), 1)
+                onState(.transferring(detail: "\(url.lastPathComponent) (\(Formats.size(bytes: UInt64(sent))) / \(totalLabel))", progress: frac * 0.85))
             }
         }
         return "Đã cài đặt xong \(url.lastPathComponent)."
@@ -160,14 +228,16 @@ final class ApkInstaller: ObservableObject {
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         onState(.preparing("Đang tách bộ cài split từ \(url.lastPathComponent)\u{2026}"))
-        let splits = try ZipArchiveReader.extractSplitApks(from: url, to: scratch)
-        guard !splits.isEmpty else {
+        let extracted = try ZipArchiveReader.extractSplitApks(from: url, to: scratch)
+        guard !extracted.isEmpty else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Không tìm thấy tệp .apk nào bên trong gói \(url.lastPathComponent)."
             ])
         }
-
+        let splits = filterCompatibleSplits(extracted)
         let totalSize = splits.reduce(UInt64(0)) { $0 + $1.uncompressedSize }
+        let totalLabel = Formats.size(bytes: totalSize)
+
         try session.run { conn in
             session.watchdog.arm(idle: 30, overall: 120)
             let createStream = try conn.open("abb_exec:package\0install-create\0-r\0-t\0-S\0\(totalSize)")
@@ -177,15 +247,22 @@ final class ApkInstaller: ObservableObject {
             }
 
             var uploadedBytes: UInt64 = 0
+            var lastReportedBytes: UInt64 = 0
             do {
                 for (idx, split) in splits.enumerated() {
                     try Task.checkCancellation()
                     let splitSize = Int(split.uncompressedSize)
-                    let service = "abb_exec:package\0install-write\0-S\0\(splitSize)\0\(sessionID)\0split_\(idx)_\(split.fileName)"
+                    let safeSplitName = sanitizeSplitFileName(split.fileName)
+                    let service = "abb_exec:package\0install-write\0-S\0\(splitSize)\0\(sessionID)\0split_\(idx)_\(safeSplitName)"
                     session.watchdog.arm(idle: 60)
                     let writeStream = try conn.open(service)
                     let fh = try FileHandle(forReadingFrom: split.tempFileURL)
                     defer { try? fh.close() }
+
+                    onState(.transferring(
+                        detail: "\(split.fileName) (\(idx + 1)/\(splits.count)) • \(Formats.size(bytes: uploadedBytes)) / \(totalLabel)",
+                        progress: totalSize > 0 ? Double(uploadedBytes) / Double(totalSize) * 0.85 : 0
+                    ))
 
                     var sent = 0
                     while sent < splitSize {
@@ -195,8 +272,14 @@ final class ApkInstaller: ObservableObject {
                         sent += chunk.count
                         uploadedBytes += UInt64(chunk.count)
                         session.watchdog.touch()
-                        let frac = totalSize > 0 ? Double(uploadedBytes) / Double(totalSize) * 0.85 : 0.5
-                        onState(.transferring(detail: "\(split.fileName) (\(idx + 1)/\(splits.count))", progress: frac))
+                        if sent == splitSize || uploadedBytes &- lastReportedBytes >= 1_048_576 {
+                            lastReportedBytes = uploadedBytes
+                            let frac = totalSize > 0 ? Double(uploadedBytes) / Double(totalSize) * 0.85 : 0.5
+                            onState(.transferring(
+                                detail: "\(split.fileName) (\(idx + 1)/\(splits.count)) • \(Formats.size(bytes: uploadedBytes)) / \(totalLabel)",
+                                progress: frac
+                            ))
+                        }
                     }
                     let writeRes = String(decoding: try writeStream.readToEnd(limit: 16 * 1024), as: UTF8.self)
                     if let err = PackageErrorMessages.failureMessage(in: writeRes) {
@@ -220,30 +303,68 @@ final class ApkInstaller: ObservableObject {
         return "Đã cài đặt xong gói \(url.lastPathComponent) (\(splits.count) thành phần)."
     }
 
+    nonisolated private static func filterCompatibleSplits(_ splits: [ZipSplitApkEntry]) -> [ZipSplitApkEntry] {
+        let hasArm64Split = splits.contains { entry in
+            let n = entry.fileName.lowercased().replacingOccurrences(of: "-", with: "_")
+            return n.contains("arm64_v8a") || n.contains(".arm64.") || n.contains("_arm64.") || n == "arm64.apk"
+        }
+        let filtered = splits.filter { entry in
+            let n = entry.fileName.lowercased().replacingOccurrences(of: "-", with: "_")
+            if n.contains("x86_64") || n.contains(".x86.") || n.contains("_x86.") || n.hasPrefix("x86.") || n.hasPrefix("x86_") || n.contains(".mips") || n.contains("_mips") {
+                return false
+            }
+            if hasArm64Split && (n.contains("armeabi_v7a") || n.contains(".armeabi.") || n.contains("_armeabi.")) {
+                return false
+            }
+            return true
+        }
+        return filtered.isEmpty ? splits : filtered
+    }
+
+    nonisolated private static func sanitizeSplitFileName(_ name: String) -> String {
+        let cleaned = name.unicodeScalars.map { scalar -> Character in
+            let v = scalar.value
+            if (v >= 0x30 && v <= 0x39) || (v >= 0x41 && v <= 0x5A) || (v >= 0x61 && v <= 0x7A) || v == 0x2E || v == 0x5F || v == 0x2D {
+                return Character(scalar)
+            }
+            return "_"
+        }
+        let result = String(cleaned)
+        return result.isEmpty ? "split.apk" : result
+    }
+
     nonisolated private static func streamSingleApkToAbb(
         handleURL: URL,
         size: Int,
         connection: AdbConnection,
         watchdog: AdbWatchdog,
-        progress: (Double) -> Void
+        onState: @escaping @Sendable (ApkInstallState) -> Void,
+        progress: (Int) -> Void
     ) throws {
         let fh = try FileHandle(forReadingFrom: handleURL)
         defer { try? fh.close() }
         watchdog.arm(idle: 60)
         let stream = try connection.open("abb_exec:package\0install\0-r\0-t\0-S\0\(size)")
         var sent = 0
+        var lastReported = 0
+        progress(0)
         do {
             while sent < size {
+                try Task.checkCancellation()
                 let chunk = try fh.read(upToCount: min(256 * 1024, size - sent)) ?? Data()
                 if chunk.isEmpty { throw AdbError.io(EIO) }
                 try stream.write(chunk)
                 sent += chunk.count
                 watchdog.touch()
-                progress(Double(sent) / Double(size))
+                if sent == size || sent - lastReported >= 1_048_576 {
+                    lastReported = sent
+                    progress(sent)
+                }
             }
         } catch AdbError.streamClosed {
             // Package manager aborted early; read remaining diagnostic message below.
         }
+        onState(.installing("Android đang cài đặt \(handleURL.lastPathComponent)\u{2026}"))
         watchdog.arm(idle: nil, overall: 15 * 60)
         let output = String(decoding: try stream.readToEnd(limit: 64 * 1024), as: UTF8.self)
         if let err = PackageErrorMessages.failureMessage(in: output) {

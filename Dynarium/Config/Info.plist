@@ -82,6 +82,7 @@
 				<array>
 					<string>apks</string>
 					<string>apkm</string>
+					<string>xapk</string>
 				</array>
 			</dict>
 		</dict>

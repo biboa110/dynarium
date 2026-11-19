@@ -787,11 +787,21 @@ nonisolated enum ZipArchiveReader {
             ))
         }
 
-        // Order base.apk first for deterministic package install splits.
+        // Order base.apk first, then primary/non-config APKs (largest first for .xapk/.apkm), then split configs.
         return results.sorted { lhs, rhs in
-            let lhsBase = lhs.fileName.lowercased() == "base.apk"
-            let rhsBase = rhs.fileName.lowercased() == "base.apk"
-            if lhsBase != rhsBase { return lhsBase }
+            let lLower = lhs.fileName.lowercased()
+            let rLower = rhs.fileName.lowercased()
+            let lIsBase = lLower == "base.apk"
+            let rIsBase = rLower == "base.apk"
+            if lIsBase != rIsBase { return lIsBase }
+
+            let lIsConfig = lLower.hasPrefix("split_") || lLower.hasPrefix("config.")
+            let rIsConfig = rLower.hasPrefix("split_") || rLower.hasPrefix("config.")
+            if lIsConfig != rIsConfig { return !lIsConfig }
+
+            if !lIsConfig && lhs.uncompressedSize != rhs.uncompressedSize {
+                return lhs.uncompressedSize > rhs.uncompressedSize
+            }
             return lhs.fileName.localizedStandardCompare(rhs.fileName) == .orderedAscending
         }
     }

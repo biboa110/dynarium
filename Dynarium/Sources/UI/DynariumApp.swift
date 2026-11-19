@@ -46,7 +46,7 @@ struct DynariumApp: App {
 
     private func handleIncomingFile(_ url: URL) {
         let lower = url.lastPathComponent.lowercased()
-        if lower.hasSuffix(".apk") || lower.hasSuffix(".apks") || lower.hasSuffix(".apkm") || lower.hasSuffix(".zip") {
+        if lower.hasSuffix(".apk") || lower.hasSuffix(".apks") || lower.hasSuffix(".apkm") || lower.hasSuffix(".xapk") || lower.hasSuffix(".zip") {
             if let vm = session.activeVM, session.phase.isActive {
                 session.installer.install(fileURL: url, vmID: vm.id, clock: session.adbClock)
             } else {

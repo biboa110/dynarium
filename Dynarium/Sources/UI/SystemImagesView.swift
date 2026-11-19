@@ -6,21 +6,20 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+private enum ActiveImageSheet: Int, Identifiable {
+    case filePicker
+    case customURL
+    case customGuide
+
+    var id: Int { rawValue }
+}
+
 struct SystemImagesView: View {
     @EnvironmentObject private var imageStore: SystemImageStore
     @EnvironmentObject private var vmStore: VirtualMachineStore
 
-    @State private var presentingFileImporter = false
-    @State private var presentingCustomURL = false
-    @State private var presentingCustomGuide = false
+    @State private var activeSheet: ActiveImageSheet?
     @State private var imagePendingDeletion: SystemImageManifest?
-
-    private var importContentTypes: [UTType] {
-        var list: [UTType] = [.gzip, .archive, .data]
-        if let zst = UTType(filenameExtension: "zst") { list.append(zst) }
-        if let tar = UTType(filenameExtension: "tar") { list.append(tar) }
-        return list
-    }
 
     var body: some View {
         NavigationStack {
@@ -83,7 +82,7 @@ struct SystemImagesView: View {
                         tone: .tinted,
                         disabled: imageStore.isBusy()
                     ) {
-                        presentingFileImporter = true
+                        activeSheet = .filePicker
                     }
 
                     CenteredActionButton(
@@ -92,11 +91,11 @@ struct SystemImagesView: View {
                         tone: .tinted,
                         disabled: imageStore.isBusy()
                     ) {
-                        presentingCustomURL = true
+                        activeSheet = .customURL
                     }
 
                     Button {
-                        presentingCustomGuide = true
+                        activeSheet = .customGuide
                     } label: {
                         Label("Nguồn chính thức & Hướng dẫn Custom ROM", systemImage: "doc.text.magnifyingglass")
                     }
@@ -153,18 +152,18 @@ struct SystemImagesView: View {
 
                     Menu {
                         Button {
-                            presentingFileImporter = true
+                            activeSheet = .filePicker
                         } label: {
                             Label("Nhập tệp ROM từ Tệp (.tar.gz / .tar.zst)", systemImage: "folder")
                         }
                         Button {
-                            presentingCustomURL = true
+                            activeSheet = .customURL
                         } label: {
                             Label("Tải từ liên kết URL", systemImage: "link")
                         }
                         Divider()
                         Button {
-                            presentingCustomGuide = true
+                            activeSheet = .customGuide
                         } label: {
                             Label("Nguồn chính thức & Custom ROM", systemImage: "doc.text.magnifyingglass")
                         }
@@ -174,20 +173,25 @@ struct SystemImagesView: View {
                     .disabled(imageStore.isBusy())
                 }
             }
-            .fileImporter(
-                isPresented: $presentingFileImporter,
-                allowedContentTypes: importContentTypes,
-                allowsMultipleSelection: false
-            ) { result in
-                if case let .success(urls) = result, let url = urls.first {
-                    imageStore.importLocalArchive(at: url)
+            .sheet(item: $activeSheet) { sheet in
+                switch sheet {
+                case .filePicker:
+                    DocumentPickerSheet(
+                        contentTypes: [.item],
+                        onPick: { url in
+                            activeSheet = nil
+                            imageStore.importLocalArchive(at: url)
+                        },
+                        onCancel: {
+                            activeSheet = nil
+                        }
+                    )
+                    .ignoresSafeArea()
+                case .customURL:
+                    AddSystemImageSheet()
+                case .customGuide:
+                    CustomRomGuideSheet()
                 }
-            }
-            .sheet(isPresented: $presentingCustomURL) {
-                AddSystemImageSheet()
-            }
-            .sheet(isPresented: $presentingCustomGuide) {
-                CustomRomGuideSheet()
             }
             .alert(
                 "Lỗi cài đặt ROM",

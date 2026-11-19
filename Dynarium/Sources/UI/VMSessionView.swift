@@ -6,6 +6,14 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+private enum ActiveSessionSheet: Int, Identifiable {
+    case console
+    case stats
+    case apkPicker
+
+    var id: Int { rawValue }
+}
+
 struct VMSessionView: View {
     @EnvironmentObject private var hardware: HostHardwareProfile
     @EnvironmentObject private var session: VMRuntimeSession
@@ -14,17 +22,20 @@ struct VMSessionView: View {
 
     @State private var coversScreen = true
     @State private var hudCollapsed = false
-    @State private var presentingConsole = false
-    @State private var presentingStats = false
-    @State private var presentingApkImporter = false
+    @State private var activeSheet: ActiveSessionSheet?
     @State private var confirmingShutdown = false
 
-    private var apkTypes: [UTType] {
-        var list: [UTType] = [.zip, .data]
-        for ext in ["apk", "apks", "apkm"] {
-            if let ut = UTType(filenameExtension: ext) { list.append(ut) }
-        }
-        return list
+    private func sheetBinding(for target: ActiveSessionSheet) -> Binding<Bool> {
+        Binding(
+            get: { activeSheet == target },
+            set: { isOn in
+                if isOn {
+                    activeSheet = target
+                } else if activeSheet == target {
+                    activeSheet = nil
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -69,7 +80,7 @@ struct VMSessionView: View {
                     startedAt: session.bootStartedAt,
                     isFirstBoot: session.isFirstBootSession,
                     telemetry: session.telemetry,
-                    onOpenConsole: { presentingConsole = true },
+                    onOpenConsole: { activeSheet = .console },
                     onDismiss: {
                         withAnimation(.easeOut(duration: 0.2)) {
                             session.bootOverlayDismissed = true
@@ -90,9 +101,9 @@ struct VMSessionView: View {
             } else {
                 FloatingSessionHUD(
                     collapsed: $hudCollapsed,
-                    presentingConsole: $presentingConsole,
-                    presentingStats: $presentingStats,
-                    presentingApkImporter: $presentingApkImporter,
+                    presentingConsole: sheetBinding(for: .console),
+                    presentingStats: sheetBinding(for: .stats),
+                    presentingApkImporter: sheetBinding(for: .apkPicker),
                     confirmingShutdown: $confirmingShutdown
                 )
             }
@@ -150,37 +161,46 @@ struct VMSessionView: View {
                     vmName: vmName,
                     exitCode: exitCode,
                     note: note,
-                    onOpenConsole: { presentingConsole = true },
+                    onOpenConsole: { activeSheet = .console },
                     onDismiss: { session.dismissEndedSession() }
                 )
             }
         }
         .statusBarHidden(session.oledBlackoutActive)
         .persistentSystemOverlays(session.oledBlackoutActive ? .hidden : .automatic)
-        .sheet(isPresented: $presentingConsole) {
-            SerialConsoleSheet()
-        }
-        .sheet(isPresented: $presentingStats) {
-            SessionStatsSheet(
-                vm: session.activeVM,
-                hardware: hardware,
-                telemetry: session.telemetry,
-                adbLanAddress: session.adbLanAddress,
-                thermalState: session.thermalState,
-                coolModeEnabled: session.coolModeEnabled,
-                thermalAutoThrottleActive: session.thermalAutoThrottleActive,
-                jitActive: session.jitActiveInSession
-            )
-        }
-        .fileImporter(
-            isPresented: $presentingApkImporter,
-            allowedContentTypes: apkTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            if case let .success(urls) = result,
-               let url = urls.first,
-               let vmID = session.activeVM?.id {
-                installer.install(fileURL: url, vmID: vmID, clock: session.adbClock)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .console:
+                SerialConsoleSheet()
+            case .stats:
+                SessionStatsSheet(
+                    vm: session.activeVM,
+                    hardware: hardware,
+                    telemetry: session.telemetry,
+                    adbLanAddress: session.adbLanAddress,
+                    thermalState: session.thermalState,
+                    coolModeEnabled: session.coolModeEnabled,
+                    thermalAutoThrottleActive: session.thermalAutoThrottleActive,
+                    jitActive: session.jitActiveInSession
+                )
+            case .apkPicker:
+                DocumentPickerSheet(
+                    contentTypes: [.item],
+                    onPick: { url in
+                        activeSheet = nil
+                        if installer.state.isBusy {
+                            session.errorBannerMessage = "Đang cài một ứng dụng khác. Hãy chờ hoàn tất hoặc bấm Hủy ở thanh tiến trình phía trên."
+                        } else if let vmID = session.activeVM?.id {
+                            installer.install(fileURL: url, vmID: vmID, clock: session.adbClock)
+                        } else {
+                            session.errorBannerMessage = "Không tìm thấy phiên máy ảo đang chạy để cài đặt \(url.lastPathComponent)."
+                        }
+                    },
+                    onCancel: {
+                        activeSheet = nil
+                    }
+                )
+                .ignoresSafeArea()
             }
         }
         .confirmationDialog(

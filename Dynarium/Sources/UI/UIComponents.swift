@@ -2,6 +2,8 @@
 
 import Foundation
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 enum ActionButtonTone {
     case prominent
@@ -106,5 +108,59 @@ struct Metal4RecommendationBanner: View {
             .accessibilityLabel("Ẩn gợi ý")
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct DocumentPickerSheet: UIViewControllerRepresentable {
+    let contentTypes: [UTType]
+    let onPick: (URL) -> Void
+    let onCancel: () -> Void
+
+    init(
+        contentTypes: [UTType] = [.item],
+        onPick: @escaping (URL) -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
+        self.contentTypes = contentTypes
+        self.onPick = onPick
+        self.onCancel = onCancel
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let controller = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: false)
+        controller.allowsMultipleSelection = false
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {
+        context.coordinator.onPick = onPick
+        context.coordinator.onCancel = onCancel
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var onPick: (URL) -> Void
+        var onCancel: () -> Void
+
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else {
+                onCancel()
+                return
+            }
+            onPick(url)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
     }
 }
