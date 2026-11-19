@@ -898,6 +898,9 @@ void appendKernelCommandLine(
         kernarium::timezone::prefix};
     auto releaseArguments =
         uml::android::readKernelCommandLine(path, launcherPrefixes);
+#if UML_GPU_SOFTWARE_RENDERER
+    (void)tightMemoryHost;
+#endif
     for (auto& argument : releaseArguments) {
 #if UML_GPU_SOFTWARE_RENDERER
         if (argument.starts_with("androidboot.opengles.version=")) {
