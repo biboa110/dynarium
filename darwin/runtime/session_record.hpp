@@ -130,6 +130,10 @@ void record_kernel_crash() noexcept;
 /* Writes the memory slot now; the checkpoint thread calls it. */
 void checkpoint_session_memory() noexcept;
 
+/* Appends a brief diagnostic line directly into the session record's tail
+ * buffer without taking locks or allocating. */
+void note_diagnostic_output(std::string_view text) noexcept;
+
 /* The loader's resolution of the kernel's write import. */
 ssize_t kernel_write(int descriptor, const void *buffer, std::size_t length)
 	noexcept;

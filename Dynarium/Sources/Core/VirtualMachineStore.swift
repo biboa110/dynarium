@@ -15,9 +15,9 @@ nonisolated enum VMBootMode: String, Codable, CaseIterable, Identifiable, Sendab
 
     var displayName: String {
         switch self {
-        case .auto: "Tự động"
-        case .normal: "Android Bình thường"
-        case .recovery: "Khôi phục (Recovery)"
+        case .auto: L10n.t("vmcfg.boot_mode.auto")
+        case .normal: L10n.t("vmcfg.boot_mode.normal")
+        case .recovery: L10n.t("vmcfg.boot_mode.recovery")
         }
     }
 
@@ -39,9 +39,9 @@ nonisolated enum VMDisplayQuality: String, Codable, CaseIterable, Identifiable, 
 
     var displayName: String {
         switch self {
-        case .economy: "Nhanh (720p)"
-        case .balanced: "Cân bằng (1×)"
-        case .retina: "Sắc nét (Retina)"
+        case .economy: L10n.t("vmcfg.quality.economy")
+        case .balanced: L10n.t("vmcfg.quality.balanced")
+        case .retina: L10n.t("vmcfg.quality.retina")
         }
     }
 
@@ -179,7 +179,7 @@ nonisolated enum VMStoreError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .cloneFailed(let detail):
-            return "Không thể nhân bản máy ảo: \(detail)"
+            return L10n.f("machines.clone.failed", detail)
         }
     }
 }
@@ -355,7 +355,7 @@ final class VirtualMachineStore: ObservableObject {
 
         let cloned = VirtualMachineConfig(
             id: newID,
-            name: "\(source.name) (Bản sao)",
+            name: L10n.f("machines.row.clone_suffix", source.name),
             systemImageID: source.systemImageID,
             guestMemoryMiB: source.guestMemoryMiB,
             vcpuCount: source.vcpuCount,
@@ -457,11 +457,11 @@ final class VirtualMachineStore: ObservableObject {
         }
 
         if state == "running" || end == "running" {
-            let peakText = peakBytes.map { " (đỉnh \(Formats.size(bytes: $0)))" } ?? ""
+            let peakText = peakBytes.map { L10n.f("diag.jetsam.peak_part", Formats.size(bytes: $0)) } ?? ""
             if let avail = availableBytes, avail < (320 << 20) {
                 return VMSessionDiagnostic(
-                    title: "iOS đã đóng máy ảo (chạm trần RAM)",
-                    message: "Phiên trước bị iOS thu hồi bộ nhớ\(peakText), chỉ còn \(Formats.size(bytes: avail)) trước trần. Hãy bấm Tối ưu an toàn.",
+                    title: L10n.t("diag.jetsam.title"),
+                    message: L10n.f("diag.jetsam.message", peakText, Formats.size(bytes: avail)),
                     suggestsSafeTune: true,
                     isCrashOrJetsam: true,
                     peakBreakdown: peakBreakdown,
@@ -469,8 +469,8 @@ final class VirtualMachineStore: ObservableObject {
                 )
             }
             return VMSessionDiagnostic(
-                title: "Phiên trước bị đóng đột ngột",
-                message: "Máy ảo dừng bất thường khi đang khởi chạy\(peakText). Hãy dùng Tối ưu an toàn để giữ RAM và CPU ổn định.",
+                title: L10n.t("diag.unexpected_close.title"),
+                message: L10n.f("diag.unexpected_close.message", peakText),
                 suggestsSafeTune: true,
                 isCrashOrJetsam: true,
                 peakBreakdown: peakBreakdown,
@@ -481,8 +481,8 @@ final class VirtualMachineStore: ObservableObject {
         switch end {
         case "guest-panic":
             return VMSessionDiagnostic(
-                title: "Nhân Linux Android gặp lỗi",
-                message: "Hệ điều hành khách dừng với kernel panic\(detail).",
+                title: L10n.t("diag.guest_panic.title"),
+                message: L10n.f("diag.guest_panic.message", detail),
                 suggestsSafeTune: false,
                 isCrashOrJetsam: true,
                 peakBreakdown: peakBreakdown,
@@ -490,18 +490,18 @@ final class VirtualMachineStore: ObservableObject {
             )
         case "kernel-abort":
             return VMSessionDiagnostic(
-                title: "Nhân Linux dừng bất thường",
-                message: "Nhân máy ảo gặp sự cố trong lúc chạy\(detail).",
+                title: L10n.t("diag.kernel_abort.title"),
+                message: L10n.f("diag.kernel_abort.message", detail),
                 suggestsSafeTune: true,
                 isCrashOrJetsam: true,
                 peakBreakdown: peakBreakdown,
                 rawTail: rawTail
             )
         case "kernel-exit":
-            let codeText = status.map { " (mã \($0))" } ?? ""
+            let codeText = status.map { L10n.f("diag.kernel_exit.code_part", $0) } ?? ""
             return VMSessionDiagnostic(
-                title: "Android dừng ngoài ý muốn",
-                message: "Nhân hệ điều hành khách đã thoát\(codeText)\(detail).",
+                title: L10n.t("diag.kernel_exit.title"),
+                message: L10n.f("diag.kernel_exit.message", codeText, detail),
                 suggestsSafeTune: false,
                 isCrashOrJetsam: true,
                 peakBreakdown: peakBreakdown,
@@ -509,8 +509,8 @@ final class VirtualMachineStore: ObservableObject {
             )
         case "hibernation-restore-failed":
             return VMSessionDiagnostic(
-                title: "Cần khởi động lại từ đầu",
-                message: "Không thể khôi phục bộ nhớ ngủ đông của phiên trước; lần bật tới sẽ khởi động mới.",
+                title: L10n.t("diag.hibernate.title"),
+                message: L10n.t("diag.hibernate.message"),
                 suggestsSafeTune: false,
                 isCrashOrJetsam: false,
                 peakBreakdown: peakBreakdown,
@@ -518,8 +518,8 @@ final class VirtualMachineStore: ObservableObject {
             )
         case "host-fault", "process-exit":
             return VMSessionDiagnostic(
-                title: "Ứng dụng dừng khi máy ảo đang chạy",
-                message: "Tiến trình Dynarium gặp sự cố đột ngột\(detail). Khuyên dùng Tối ưu an toàn trước khi chạy lại.",
+                title: L10n.t("diag.host_fault.title"),
+                message: L10n.f("diag.host_fault.message", detail),
                 suggestsSafeTune: true,
                 isCrashOrJetsam: true,
                 peakBreakdown: peakBreakdown,
@@ -529,8 +529,8 @@ final class VirtualMachineStore: ObservableObject {
             return nil
         default:
             return VMSessionDiagnostic(
-                title: "Phiên trước kết thúc bất thường",
-                message: "Máy ảo chưa tắt hoàn chỉnh\(detail). Nên kiểm tra lại cấu hình trước khi khởi chạy.",
+                title: L10n.t("diag.abnormal.title"),
+                message: L10n.f("diag.abnormal.message", detail),
                 suggestsSafeTune: true,
                 isCrashOrJetsam: false,
                 peakBreakdown: peakBreakdown,
@@ -544,18 +544,18 @@ final class VirtualMachineStore: ObservableObject {
         let tokens = line.split(separator: " ")
         var segments: [String] = []
         let labels: [(String, String)] = [
-            ("guest", "Guest"),
-            ("graphics", "Đồ họa"),
-            ("cache", "Cache"),
-            ("malloc", "Malloc"),
-            ("other", "Khác"),
+            ("guest", L10n.t("diag.term.guest")),
+            ("graphics", L10n.t("diag.term.graphics")),
+            ("cache", L10n.t("diag.term.cache")),
+            ("malloc", L10n.t("diag.term.malloc")),
+            ("other", L10n.t("diag.term.other")),
         ]
         for (key, display) in labels {
             if let idx = tokens.firstIndex(of: Substring(key)), idx + 1 < tokens.count {
                 let rawVal = String(tokens[idx + 1])
                 let primary = rawVal.split(separator: "/").first.map(String.init) ?? rawVal
                 if primary != "0" {
-                    segments.append("\(display) \(primary) MiB")
+                    segments.append(L10n.f("diag.term.entry", display, primary))
                 }
             }
         }

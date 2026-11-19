@@ -6,23 +6,26 @@ import UIKit
 struct SerialConsoleSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var session: VMRuntimeSession
+    @EnvironmentObject private var l10n: AppLocalization
 
     @State private var commandInput: String = ""
 
-    private let quickCommands = [
-        ("Version", "getprop ro.build.version.release"),
-        ("Disk", "df -h /data"),
-        ("Memory", "free -m"),
-        ("Top", "top -n 1 | head -n 18"),
-        ("Logcat", "logcat -d -t 30"),
-    ]
+    private var quickCommands: [(String, String)] {
+        [
+            (l10n.t("console.quick.version"), "getprop ro.build.version.release"),
+            (l10n.t("console.quick.disk"), "df -h /data"),
+            (l10n.t("console.quick.memory"), "free -m"),
+            (l10n.t("console.quick.top"), "top -n 1 | head -n 18"),
+            (l10n.t("console.quick.logcat"), "logcat -d -t 30"),
+        ]
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        Text(session.consoleText.isEmpty ? "Đang chờ đầu ra Serial Console từ nhân Linux\u{2026}" : session.consoleText)
+                        Text(session.consoleText.isEmpty ? l10n.t("console.waiting") : session.consoleText)
                             .font(.system(size: 11.5, design: .monospaced))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
@@ -41,7 +44,7 @@ struct SerialConsoleSheet: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(quickCommands, id: \.0) { title, cmd in
+                        ForEach(quickCommands, id: \.1) { title, cmd in
                             Button(title) {
                                 session.sendConsoleLine(cmd)
                             }
@@ -54,7 +57,7 @@ struct SerialConsoleSheet: View {
                 }
 
                 HStack(spacing: 8) {
-                    TextField("Nhập lệnh shell (vd: ls -la /data)", text: $commandInput)
+                    TextField(l10n.t("console.cmd_placeholder"), text: $commandInput)
                         .font(.system(size: 13, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
                         .textInputAutocapitalization(.never)
@@ -62,7 +65,7 @@ struct SerialConsoleSheet: View {
                         .submitLabel(.send)
                         .onSubmit(submitCommand)
 
-                    Button("Gửi", action: submitCommand)
+                    Button(l10n.t("common.send"), action: submitCommand)
                         .buttonStyle(.borderedProminent)
                         .disabled(commandInput.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -70,7 +73,7 @@ struct SerialConsoleSheet: View {
                 .padding(.bottom, 12)
                 .padding(.top, 4)
             }
-            .navigationTitle("Serial Console")
+            .navigationTitle(l10n.t("console.title"))
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 session.setConsoleSheetVisible(true)
@@ -84,19 +87,19 @@ struct SerialConsoleSheet: View {
                         Button {
                             UIPasteboard.general.string = session.consoleText
                         } label: {
-                            Label("Sao chép toàn bộ nhật ký", systemImage: "doc.on.doc")
+                            Label(l10n.t("console.copy_all"), systemImage: "doc.on.doc")
                         }
                         Button(role: .destructive) {
                             session.clearConsole()
                         } label: {
-                            Label("Xóa nhật ký hiển thị", systemImage: "trash")
+                            Label(l10n.t("console.clear"), systemImage: "trash")
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Đóng") { dismiss() }
+                    Button(l10n.t("common.close")) { dismiss() }
                 }
             }
         }

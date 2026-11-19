@@ -24,6 +24,7 @@ struct MachinesListView: View {
     @EnvironmentObject private var imageStore: SystemImageStore
     @EnvironmentObject private var vmStore: VirtualMachineStore
     @EnvironmentObject private var session: VMRuntimeSession
+    @EnvironmentObject private var l10n: AppLocalization
 
     @AppStorage("dynarium.dismissedMetal4Tip") private var dismissedMetal4Tip = false
     @State private var presentingCreate = false
@@ -94,10 +95,10 @@ struct MachinesListView: View {
                 HardwareSummaryCard(hardware: hardware)
                 if !hardware.hasExtendedVirtualAddressing {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Thiếu quyền địa chỉ ảo 64 GiB (lỗi mã -4)", systemImage: "exclamationmark.triangle.fill")
+                        Label(l10n.t("machines.eva.missing_title"), systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.orange)
-                        Text("Công cụ ký đã gỡ bỏ entitlement Extended Virtual Addressing. Trên iOS 16 hãy cài IPA bằng TrollStore hoặc dùng chứng chỉ giữ nguyên entitlements để chạy máy ảo.")
+                        Text(l10n.t("machines.eva.missing_body"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -106,10 +107,10 @@ struct MachinesListView: View {
                 }
                 if session.processRequiresRestart {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Cần khởi động lại ứng dụng Dynarium", systemImage: "arrow.clockwise.circle.fill")
+                        Label(l10n.t("machines.restart_required.title"), systemImage: "arrow.clockwise.circle.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.orange)
-                        Text("Phiên trước bị ép dừng ngang nên vùng nhớ nhân vẫn còn giữ lại. Hãy vuốt đóng hoàn toàn ứng dụng Dynarium rồi mở lại để tránh lỗi mã -3.")
+                        Text(l10n.t("machines.restart_required.body"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -125,19 +126,19 @@ struct MachinesListView: View {
                     }
                 }
             } header: {
-                Text("Nền tảng phần cứng")
+                Text(l10n.t("machines.section.hardware"))
             }
 
             machinesSection
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Dynarium")
+        .navigationTitle(l10n.t("machines.nav.title"))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     presentingCreate = true
                 } label: {
-                    Label("Tạo máy ảo", systemImage: "plus")
+                    Label(l10n.t("machines.action.create_vm"), systemImage: "plus")
                 }
                 .disabled(imageStore.images.isEmpty)
             }
@@ -154,7 +155,7 @@ struct MachinesListView: View {
             Section {
                 NoImageGuidanceCard(action: switchToImagesTab)
             } header: {
-                Text("Bắt đầu nhanh")
+                Text(l10n.t("machines.section.quick_start"))
             }
         } else if vmStore.machines.isEmpty {
             Section {
@@ -162,7 +163,7 @@ struct MachinesListView: View {
                     presentingCreate = true
                 }
             } header: {
-                Text("Máy ảo Android")
+                Text(l10n.t("machines.section.android_vms"))
             }
         } else {
             Section {
@@ -170,9 +171,9 @@ struct MachinesListView: View {
                     vmRow(for: vm)
                 }
             } header: {
-                Text("Danh sách máy ảo (\(vmStore.machines.count))")
+                Text(l10n.f("machines.section.list_header", String(vmStore.machines.count)))
             } footer: {
-                Text("Các máy ảo dùng chung hệ điều hành gốc ở chế độ chỉ đọc và lưu dữ liệu riêng theo chuẩn thưa APFS (CoW).")
+                Text(l10n.t("machines.section.list_footer"))
             }
         }
     }
@@ -215,7 +216,7 @@ struct MachinesListView: View {
     private func launch(_ vm: VirtualMachineConfig) {
         hardware.refreshDynamicMetrics()
         guard let image = imageStore.images.first(where: { $0.id == vm.systemImageID }) else {
-            cloneErrorMessage = "ROM gắn với máy ảo này không còn tồn tại. Hãy chỉnh sửa để chọn ROM mới."
+            cloneErrorMessage = l10n.t("machines.error.missing_rom")
             return
         }
         let safety = hardware.evaluateLaunchSafety(for: vm)
@@ -241,6 +242,7 @@ struct MachinesListView: View {
 
 private struct HardwareSummaryCard: View {
     @ObservedObject var hardware: HostHardwareProfile
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -279,17 +281,17 @@ private struct HardwareSummaryCard: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 StatChip(
-                    label: "Nhân vCPU",
+                    label: l10n.t("machines.stats.vcpus"),
                     value: "\(hardware.maxVCPUs)"
                 )
                 StatChip(
-                    label: "Trần RAM",
+                    label: l10n.t("machines.stats.ram_ceiling"),
                     value: hardware.availableProcessMemoryBytes > 0
                         ? Formats.size(bytes: hardware.availableProcessMemoryBytes)
                         : Formats.size(bytes: hardware.physicalMemoryBytes)
                 )
                 StatChip(
-                    label: "Bộ nhớ trống",
+                    label: l10n.t("machines.stats.free_storage"),
                     value: Formats.size(bytes: hardware.hostFreeDiskBytes)
                 )
             }
@@ -299,8 +301,8 @@ private struct HardwareSummaryCard: View {
                     .fill(hardware.debuggerAttached ? Color.green : Color.secondary.opacity(0.45))
                     .frame(width: 7, height: 7)
                 Text(hardware.debuggerAttached
-                     ? "JIT đang bật — Tốc độ CPU tối đa"
-                     : "Chưa bật JIT (Gadget) — Bật JIT qua TrollStore / StikDebug để nhanh hơn 4–8×")
+                     ? l10n.t("machines.jit.enabled")
+                     : l10n.t("machines.jit.gadget"))
                     .font(.caption2)
                     .foregroundStyle(hardware.debuggerAttached ? .primary : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -333,17 +335,18 @@ private struct StatChip: View {
 
 private struct NoImageGuidanceCard: View {
     let action: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Chưa có hệ điều hành (ROM)", systemImage: "internaldrive")
+            Label(l10n.t("machines.no_image.title"), systemImage: "internaldrive")
                 .font(.headline)
-            Text("Dynarium tách riêng Hypervisor và ROM giống VMware. Hãy tải LineageOS 24 (Android 17) từ Kho ROM hoặc nhập tệp .tar.gz / .tar.zst có sẵn để tạo máy ảo.")
+            Text(l10n.t("machines.no_image.body"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             CenteredActionButton(
-                title: "Mở Kho ROM để tải",
+                title: l10n.t("machines.no_image.cta"),
                 systemImage: "square.and.arrow.down",
                 tone: .prominent,
                 action: action
@@ -355,17 +358,18 @@ private struct NoImageGuidanceCard: View {
 
 private struct NoMachineGuidanceCard: View {
     let action: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Sẵn sàng tạo máy ảo đầu tiên", systemImage: "desktopcomputer")
+            Label(l10n.t("machines.no_vm.title"), systemImage: "desktopcomputer")
                 .font(.headline)
-            Text("ROM Android đã sẵn sàng. Hãy tạo máy ảo mới với thông số RAM/CPU được tự động tối ưu theo thiết bị của bạn.")
+            Text(l10n.t("machines.no_vm.body"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             CenteredActionButton(
-                title: "Tạo máy ảo mới",
+                title: l10n.t("machines.no_vm.cta"),
                 systemImage: "plus.circle.fill",
                 tone: .prominent,
                 action: action
@@ -391,10 +395,11 @@ private struct VMRowView: View {
     let onDismissDiagnostic: () -> Void
     let onWipeData: () -> Void
     let onDelete: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     private var imageSubtitle: String {
         guard let image else {
-            return "Thiếu ROM gắn kết — Cần chọn lại ROM"
+            return l10n.t("machines.row.missing_rom")
         }
         if image.name.localizedCaseInsensitiveContains("Android") {
             return image.name
@@ -434,27 +439,27 @@ private struct VMRowView: View {
                     HStack(spacing: 8) {
                         Menu {
                             Button(action: onLaunch) {
-                                Label("Khởi động máy ảo", systemImage: "play.fill")
+                                Label(l10n.t("machines.row.menu.start"), systemImage: "play.fill")
                             }
                             .disabled(!canLaunch || image == nil)
 
                             Button(action: onEdit) {
-                                Label("Cấu hình phần cứng", systemImage: "slider.horizontal.3")
+                                Label(l10n.t("machines.row.menu.configure"), systemImage: "slider.horizontal.3")
                             }
 
                             Button(action: onClone) {
-                                Label("Nhân bản nhanh (APFS)", systemImage: "doc.on.doc")
+                                Label(l10n.t("machines.row.menu.clone"), systemImage: "doc.on.doc")
                             }
 
                             Divider()
 
                             Button(role: .destructive, action: onWipeData) {
-                                Label("Đặt lại dữ liệu (Wipe)", systemImage: "eraser")
+                                Label(l10n.t("machines.row.menu.wipe"), systemImage: "eraser")
                             }
                             .disabled(!diskCreated)
 
                             Button(role: .destructive, action: onDelete) {
-                                Label("Xóa máy ảo", systemImage: "trash")
+                                Label(l10n.t("machines.row.menu.delete"), systemImage: "trash")
                             }
                         } label: {
                             ZStack {
@@ -488,7 +493,7 @@ private struct VMRowView: View {
             }
 
             HStack(spacing: 10) {
-                Label("\(vm.vcpuCount) vCPU", systemImage: "cpu")
+                Label(l10n.f("machines.row.vcpu_badge", String(vm.vcpuCount)), systemImage: "cpu")
                 Label(Formats.size(mib: vm.guestMemoryMiB), systemImage: "memorychip")
                 Label(
                     diskCreated
@@ -534,7 +539,7 @@ private struct VMRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let breakdown = diagnostic.peakBreakdown {
-                        Text("Đỉnh RAM: \(breakdown)")
+                        Text(l10n.f("machines.row.peak_ram_line", breakdown))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -547,7 +552,7 @@ private struct VMRowView: View {
                                     HStack(spacing: 6) {
                                         Image(systemName: "wrench.and.screwdriver.fill")
                                             .font(.caption.weight(.semibold))
-                                        Text("Tối ưu an toàn")
+                                        Text(l10n.t("machines.row.safe_tune"))
                                             .font(.caption.weight(.semibold))
                                     }
                                     .foregroundStyle(Color.accentColor)
@@ -562,7 +567,7 @@ private struct VMRowView: View {
                                     HStack(spacing: 5) {
                                         Image(systemName: "doc.text.magnifyingglass")
                                             .font(.caption.weight(.semibold))
-                                        Text("Xem chi tiết")
+                                        Text(l10n.t("machines.row.details"))
                                             .font(.caption.weight(.semibold))
                                     }
                                     .foregroundStyle(.primary)
@@ -592,10 +597,11 @@ private struct SafetyLaunchAlertModifier: ViewModifier {
     @Binding var pending: PendingSafetyLaunch?
     let onApplyAndStart: (PendingSafetyLaunch) -> Void
     let onForceStart: (PendingSafetyLaunch) -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
-            "Điều chỉnh cấu hình tránh tràn RAM?",
+            l10n.t("machines.safety.dialog_title"),
             isPresented: Binding(
                 get: { pending != nil },
                 set: { if !$0 { pending = nil } }
@@ -603,16 +609,16 @@ private struct SafetyLaunchAlertModifier: ViewModifier {
             titleVisibility: .visible
         ) {
             if let item = pending {
-                Button("Tối ưu an toàn (\(item.safety.suggestedVCPUs) vCPU • \(Formats.size(mib: item.safety.suggestedMemoryMiB)))") {
+                Button(l10n.f("machines.safety.apply_and_start", String(item.safety.suggestedVCPUs), Formats.size(mib: item.safety.suggestedMemoryMiB))) {
                     pending = nil
                     onApplyAndStart(item)
                 }
-                Button("Vẫn chạy cấu hình hiện tại") {
+                Button(l10n.t("machines.safety.force_start")) {
                     pending = nil
                     onForceStart(item)
                 }
             }
-            Button("Hủy", role: .cancel) { pending = nil }
+            Button(l10n.t("common.cancel"), role: .cancel) { pending = nil }
         } message: {
             if let item = pending, let reason = item.safety.reason {
                 Text(reason)
@@ -629,10 +635,11 @@ private struct MachineAlertsModifier: ViewModifier {
     let deviceKindName: String
     let onWipe: (UUID) -> Void
     let onDelete: (UUID) -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     func body(content: Content) -> some View {
         let withWipe = content.confirmationDialog(
-            "Đặt lại dữ liệu máy ảo?",
+            l10n.t("machines.wipe.title"),
             isPresented: Binding(
                 get: { confirmingWipeVM != nil },
                 set: { if !$0 { confirmingWipeVM = nil } }
@@ -640,18 +647,18 @@ private struct MachineAlertsModifier: ViewModifier {
             titleVisibility: .visible
         ) {
             if let target = confirmingWipeVM {
-                Button("Xóa sạch phân vùng Data", role: .destructive) {
+                Button(l10n.t("machines.wipe.confirm"), role: .destructive) {
                     onWipe(target.id)
                     confirmingWipeVM = nil
                 }
             }
-            Button("Hủy", role: .cancel) { confirmingWipeVM = nil }
+            Button(l10n.t("common.cancel"), role: .cancel) { confirmingWipeVM = nil }
         } message: {
-            Text("Toàn bộ ứng dụng đã cài và dữ liệu trong data.img sẽ bị xóa; cấu hình máy ảo vẫn được giữ lại.")
+            Text(l10n.t("machines.wipe.message"))
         }
 
         let withDelete = withWipe.confirmationDialog(
-            "Xóa máy ảo vĩnh viễn?",
+            l10n.t("machines.delete.title"),
             isPresented: Binding(
                 get: { confirmingDeleteVM != nil },
                 set: { if !$0 { confirmingDeleteVM = nil } }
@@ -659,38 +666,45 @@ private struct MachineAlertsModifier: ViewModifier {
             titleVisibility: .visible
         ) {
             if let target = confirmingDeleteVM {
-                Button("Xóa máy ảo", role: .destructive) {
+                Button(l10n.t("machines.delete.confirm"), role: .destructive) {
                     onDelete(target.id)
                     confirmingDeleteVM = nil
                 }
             }
-            Button("Hủy", role: .cancel) { confirmingDeleteVM = nil }
+            Button(l10n.t("common.cancel"), role: .cancel) { confirmingDeleteVM = nil }
         } message: {
-            Text("Hành động này xóa cả cấu hình và dữ liệu người dùng của máy ảo.")
+            Text(l10n.t("machines.delete.message"))
         }
 
         let withSpaceAlert = withDelete.alert(
-            "Không đủ dung lượng trống",
+            l10n.t("machines.space.title"),
             isPresented: Binding(
                 get: { shortage != nil },
                 set: { if !$0 { shortage = nil } }
             )
         ) {
-            Button("Đóng", role: .cancel) { shortage = nil }
+            Button(l10n.t("common.close"), role: .cancel) { shortage = nil }
         } message: {
             if let s = shortage {
-                Text(s.message(device: deviceKindName) + "\n" + s.advice(device: deviceKindName))
+                Text(
+                    l10n.f(
+                        "machines.space.message",
+                        Formats.size(bytes: s.neededBytes),
+                        deviceKindName,
+                        Formats.size(bytes: s.freeBytes)
+                    ) + "\n" + l10n.f("machines.space.advice", deviceKindName)
+                )
             }
         }
 
         withSpaceAlert.alert(
-            "Không thể nhân bản máy ảo",
+            l10n.t("machines.clone.error_title"),
             isPresented: Binding(
                 get: { cloneErrorMessage != nil },
                 set: { if !$0 { cloneErrorMessage = nil } }
             )
         ) {
-            Button("Đóng", role: .cancel) { cloneErrorMessage = nil }
+            Button(l10n.t("common.close"), role: .cancel) { cloneErrorMessage = nil }
         } message: {
             Text(cloneErrorMessage ?? "")
         }
@@ -702,16 +716,17 @@ private struct SessionDiagnosticSheet: View {
     let diagnostic: VMSessionDiagnostic
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var l10n: AppLocalization
     @State private var copied = false
 
     private var exportText: String {
         var parts = [
-            "Máy ảo: \(vmName)",
-            "Sự cố: \(diagnostic.title)",
-            "Tóm tắt: \(diagnostic.message)"
+            l10n.f("diag.export.vm", vmName),
+            l10n.f("diag.export.issue", diagnostic.title),
+            l10n.f("diag.export.summary", diagnostic.message)
         ]
         if let breakdown = diagnostic.peakBreakdown {
-            parts.append("Đỉnh RAM: \(breakdown)")
+            parts.append(l10n.f("diag.export.peak", breakdown))
         }
         if let rawTail = diagnostic.rawTail, !rawTail.isEmpty {
             parts.append("\n--- kernel-output ---\n\(rawTail)")
@@ -722,8 +737,8 @@ private struct SessionDiagnosticSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Chẩn đoán phiên gần nhất") {
-                    LabeledContent("Máy ảo", value: vmName)
+                Section(l10n.t("diag.sheet.section_summary")) {
+                    LabeledContent(l10n.t("diag.sheet.label_vm"), value: vmName)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(diagnostic.title)
                             .font(.headline)
@@ -735,7 +750,7 @@ private struct SessionDiagnosticSheet: View {
 
                     if let breakdown = diagnostic.peakBreakdown {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Phân bổ đỉnh RAM")
+                            Text(l10n.t("diag.sheet.label_peak_ram"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             Text(breakdown)
@@ -746,7 +761,7 @@ private struct SessionDiagnosticSheet: View {
                 }
 
                 if let rawTail = diagnostic.rawTail, !rawTail.isEmpty {
-                    Section("Nhật ký Kernel cuối phiên") {
+                    Section(l10n.t("diag.sheet.section_kernel_log")) {
                         ScrollView(.horizontal, showsIndicators: true) {
                             Text(rawTail)
                                 .font(.caption2.monospaced())
@@ -757,7 +772,7 @@ private struct SessionDiagnosticSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Chi tiết phiên chạy")
+            .navigationTitle(l10n.t("diag.sheet.nav_title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -766,13 +781,13 @@ private struct SessionDiagnosticSheet: View {
                         copied = true
                     } label: {
                         Label(
-                            copied ? "Đã chép" : "Sao chép",
+                            copied ? l10n.t("common.copied") : l10n.t("common.copy"),
                             systemImage: copied ? "checkmark" : "doc.on.doc"
                         )
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Xong") {
+                    Button(l10n.t("common.done")) {
                         dismiss()
                     }
                 }

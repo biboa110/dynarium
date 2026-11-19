@@ -44,5 +44,11 @@ uml_arm64_jit_execute_sme(CpuState *, Tlb *, std::uint32_t) noexcept;
  * (detail/sm0_vector_length.hpp). */
 extern "C" std::uint64_t
 uml_arm64_jit_execute_sm0_spill(CpuState *, Tlb *, std::uint32_t) noexcept;
+/* Software fallbacks when the host lacks FEAT_DotProd / FEAT_I8MM / FEAT_RDM
+ * (e.g. Apple A11 running JIT on iOS 16). */
+extern "C" std::uint64_t
+uml_arm64_jit_execute_simd_dot(CpuState *, Tlb *, std::uint32_t) noexcept;
+extern "C" std::uint64_t
+uml_arm64_jit_execute_simd_rdm(CpuState *, Tlb *, std::uint32_t) noexcept;
 
 } // namespace uml::cpu::arm64

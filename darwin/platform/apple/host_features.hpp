@@ -100,6 +100,29 @@ native_jscvt_subnormal_flags_correct() noexcept
 	return architectural_minimum;
 }
 
+[[nodiscard]] constexpr const char *legacy_host_arm_feature_sysctl(
+	ArmFeature feature) noexcept
+{
+	switch (feature) {
+	case ArmFeature::lse:
+		return "hw.optional.armv8_1_atomics";
+	case ArmFeature::crc32:
+		return "hw.optional.armv8_crc32";
+	case ArmFeature::fp16:
+		return "hw.optional.neon_fp16";
+	case ArmFeature::fhm:
+		return "hw.optional.armv8_2_fhm";
+	case ArmFeature::sha512:
+		return "hw.optional.armv8_2_sha512";
+	case ArmFeature::sha3:
+		return "hw.optional.armv8_2_sha3";
+	case ArmFeature::fcma:
+		return "hw.optional.armv8_3_compnum";
+	default:
+		return nullptr;
+	}
+}
+
 [[nodiscard]] inline bool query_host_arm_feature(
 	ArmFeature feature) noexcept
 {
@@ -118,8 +141,13 @@ native_jscvt_subnormal_flags_correct() noexcept
 	if (length <= 0 || static_cast<std::size_t>(length) >= name.size())
 		return false;
 
-	return query_host_arm_feature_sysctl(name.data()) ==
-		HostCapabilityResult::supported;
+	const auto queried = query_host_arm_feature_sysctl(name.data());
+	if (queried != HostCapabilityResult::unavailable)
+		return queried == HostCapabilityResult::supported;
+	if (const char *legacy = legacy_host_arm_feature_sysctl(feature))
+		return query_host_arm_feature_sysctl(legacy) ==
+			HostCapabilityResult::supported;
+	return false;
 }
 
 /* Whether the virtual CPU implements SME on a host that has the profile, at

@@ -1791,15 +1791,18 @@ gadget rcpc_load_\name
 	rcpc_load_gadget \name\()_z, \instruction, \host_register, \alignment, \extension, 1
 .endm
 
-rcpc_load_modes zero_b, ldaprb, w, 0, 0
-rcpc_load_modes zero_h, ldaprh, w, 1, 0
-rcpc_load_modes zero_w, ldapr, w, 3, 0
-rcpc_load_modes zero_x, ldapr, x, 7, 0
-rcpc_load_modes sb_w, ldaprb, w, 0, 1
-rcpc_load_modes sb_x, ldaprb, w, 0, 2
-rcpc_load_modes sh_w, ldaprh, w, 1, 3
-rcpc_load_modes sh_x, ldaprh, w, 1, 4
-rcpc_load_modes sw_x, ldapr, w, 3, 5
+/* Use base ARMv8.0 LDAR{B,H,} rather than FEAT_LRCPC LDAPR{B,H,}: RCsc
+ * acquire is strictly stronger than RCpc, keeps identical 4-byte encoding size
+ * in the gadget bank, and executes safely on Apple A11 and earlier cores. */
+rcpc_load_modes zero_b, ldarb, w, 0, 0
+rcpc_load_modes zero_h, ldarh, w, 1, 0
+rcpc_load_modes zero_w, ldar, w, 3, 0
+rcpc_load_modes zero_x, ldar, x, 7, 0
+rcpc_load_modes sb_w, ldarb, w, 0, 1
+rcpc_load_modes sb_x, ldarb, w, 0, 2
+rcpc_load_modes sh_w, ldarh, w, 1, 3
+rcpc_load_modes sh_x, ldarh, w, 1, 4
+rcpc_load_modes sw_x, ldar, w, 3, 5
 
 .purgem rcpc_load_modes
 .purgem rcpc_load_gadget

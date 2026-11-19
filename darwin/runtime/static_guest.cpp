@@ -18,15 +18,20 @@
 #include "runtime/context.hpp"
 #include "runtime/execution_state.hpp"
 #include "runtime/guest_entry.hpp"
+#include "runtime/session_record.hpp"
 #include "uml_darwin_guest.h"
 #include "uml_darwin_cpu.h"
 #include "uml_darwin_static_mmu.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <string_view>
+#include <unistd.h>
 
 namespace uml::emulator {
 
@@ -611,6 +616,42 @@ template<uml::cpu::EngineKind Kind>
 }
 
 template<uml::cpu::EngineKind Kind>
+void log_guest_illegal_instruction(
+	const uml::cpu::arm64::CpuState &cpu,
+	StaticGuestMemory &memory) noexcept
+{
+	static std::atomic<unsigned> logged_count{0};
+	const unsigned index =
+		logged_count.fetch_add(1U, std::memory_order_relaxed);
+	if (index >= 16U)
+		return;
+	std::array<std::byte, 4> bytes{};
+	const bool fetched = memory.fetch(cpu.pc, bytes);
+	std::uint32_t insn = 0;
+	if (fetched)
+		std::memcpy(&insn, bytes.data(), sizeof(insn));
+	const char *engine_name =
+		Kind == uml::cpu::EngineKind::jit ? "jit" : "gadgets";
+	char buffer[256];
+	const int length = std::snprintf(buffer, sizeof(buffer),
+		"[dynarium-sigill] engine=%s pc=0x%llx insn=0x%08x (fetched=%u) sp=0x%llx lr=0x%llx\n",
+		engine_name,
+		static_cast<unsigned long long>(cpu.pc),
+		insn,
+		fetched ? 1U : 0U,
+		static_cast<unsigned long long>(cpu.sp),
+		static_cast<unsigned long long>(cpu.registers[30]));
+	if (length <= 0)
+		return;
+	const auto used = std::min(static_cast<std::size_t>(length),
+		sizeof(buffer) - 1U);
+	const std::string_view message{buffer, used};
+	::uml::runtime::note_diagnostic_output(message);
+	[[maybe_unused]] const ssize_t written =
+		::write(STDERR_FILENO, message.data(), message.size());
+}
+
+template<uml::cpu::EngineKind Kind>
 int run_common_guest(
 	void *register_pointer, void *fp_pointer,
 	unsigned long fp_size, unsigned long generation, unsigned long *tls)
@@ -709,6 +750,7 @@ int run_common_guest(
 		event = DARWIN_UML_EVENT_INTERRUPT;
 		break;
 	case uml::cpu::ExitReason::illegal_instruction:
+		log_guest_illegal_instruction<Kind>(cpu, memory);
 		event = DARWIN_UML_EVENT_ILLEGAL_INSTRUCTION;
 		break;
 	case uml::cpu::ExitReason::breakpoint:

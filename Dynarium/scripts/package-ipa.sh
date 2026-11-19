@@ -123,6 +123,11 @@ if [ "$EXPECTED_MINOS" = "16.0" ]; then
 		fail "Dynarium.app failed iOS 16.0 ABI verification"
 fi
 
+for lang in en vi zh-Hans ja ko es; do
+	[ -f "$DEST_APP/$lang.lproj/Localizable.strings" ] ||
+		fail "missing localization bundle: $lang.lproj/Localizable.strings"
+done
+
 rm -f -- "$ABS_OUTPUT"
 (
 	CDPATH= cd -- "$STAGE"

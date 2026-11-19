@@ -6,6 +6,7 @@
 #include "jit_semantic_reservation.hpp"
 
 #include "cpu/arm64/detail/floating_exception.hpp"
+#include "cpu/arm64/detail/integer_multiply.hpp"
 #include "cpu/arm64/detail/memory_copy_set.hpp"
 #include "cpu/arm64/detail/sm0_spill.hpp"
 #include "cpu/arm64/detail/single_copy_alignment.hpp"
@@ -827,6 +828,106 @@ uml_arm64_jit_execute_sm0_spill(CpuState *cpu, Tlb *tlb,
     break;
   }
   return pack_jit_result(Event::fatal, 0);
+}
+
+/*
+ * Software fallback for FEAT_DotProd / FEAT_I8MM dot-product encodings
+ * (SDOT, UDOT, USDOT, SUDOT in both vector and indexed shapes) when the host
+ * CPU lacks hardware dot-product extensions.
+ */
+extern "C" std::uint64_t
+uml_arm64_jit_execute_simd_dot(CpuState *cpu, Tlb *tlb,
+                               std::uint32_t instruction) noexcept {
+  if (cpu == nullptr || tlb == nullptr)
+    return pack_jit_result(Event::fatal, 0);
+  materialize_semantic_cpu_state(*cpu);
+
+  const bool indexed = (instruction & 0x9f00'0400U) == 0x0f00'0000U;
+  const bool q = (instruction & 0x4000'0000U) != 0U;
+  const unsigned lanes = q ? 4U : 2U;
+  const unsigned rd = instruction & 31U;
+  const unsigned rn = (instruction >> 5) & 31U;
+  unsigned rm = (instruction >> 16) & 31U;
+  unsigned indexed_lane = 0U;
+  bool left_signed = false;
+  bool right_signed = false;
+
+  if (!indexed) {
+    const bool ordinary = (instruction & 0x9f20'fc00U) == 0x0e00'9400U;
+    if (ordinary) {
+      const bool unsigned_dot = (instruction & 0x2000'0000U) != 0U;
+      left_signed = !unsigned_dot;
+      right_signed = !unsigned_dot;
+    } else if ((instruction & 0xbf20'fc00U) == 0x0e00'9c00U) {
+      left_signed = false;
+      right_signed = true;
+    } else {
+      return pack_jit_result(Event::illegal_instruction, 0);
+    }
+  } else {
+    const unsigned operation = (instruction >> 12) & 15U;
+    const unsigned size = (instruction >> 22) & 3U;
+    if (operation == 14U && size == 2U) {
+      const bool unsigned_dot = (instruction & 0x2000'0000U) != 0U;
+      left_signed = !unsigned_dot;
+      right_signed = !unsigned_dot;
+    } else if (operation == 15U && (instruction & 0x2000'0000U) == 0U &&
+               (size == 0U || size == 2U)) {
+      if (size == 0U) {
+        left_signed = true;
+        right_signed = false;
+      } else {
+        left_signed = false;
+        right_signed = true;
+      }
+    } else {
+      return pack_jit_result(Event::illegal_instruction, 0);
+    }
+    indexed_lane = ((instruction >> 10) & 2U) | ((instruction >> 21) & 1U);
+  }
+
+  const auto left_bytes = cpu->vectors[rn].bytes;
+  const auto right_bytes = cpu->vectors[rm].bytes;
+  const auto dst_bytes = cpu->vectors[rd].bytes;
+  std::array<std::byte, 16> result{};
+
+  for (unsigned lane = 0U; lane < lanes; ++lane) {
+    std::uint32_t acc = 0U;
+    std::memcpy(&acc, dst_bytes.data() + lane * 4U, sizeof(acc));
+    std::uint32_t sum = 0U;
+    const unsigned right_base = indexed ? indexed_lane * 4U : lane * 4U;
+    for (unsigned element = 0U; element < 4U; ++element) {
+      const auto raw_a = std::to_integer<std::uint8_t>(left_bytes[lane * 4U + element]);
+      const auto raw_b = std::to_integer<std::uint8_t>(right_bytes[right_base + element]);
+      const std::int32_t a = left_signed
+                                 ? static_cast<std::int32_t>(static_cast<std::int8_t>(raw_a))
+                                 : static_cast<std::int32_t>(raw_a);
+      const std::int32_t b = right_signed
+                                 ? static_cast<std::int32_t>(static_cast<std::int8_t>(raw_b))
+                                 : static_cast<std::int32_t>(raw_b);
+      sum += static_cast<std::uint32_t>(a * b);
+    }
+    const std::uint32_t updated = acc + sum;
+    std::memcpy(result.data() + lane * 4U, &updated, sizeof(updated));
+  }
+
+  cpu->vectors[rd].bytes = result;
+  cpu->pc += sizeof(std::uint32_t);
+  return pack_jit_result(Event::continued, 1);
+}
+
+/* Software fallback for FEAT_RDM (SQRDMLAH / SQRDMLSH). */
+extern "C" std::uint64_t
+uml_arm64_jit_execute_simd_rdm(CpuState *cpu, Tlb *tlb,
+                               std::uint32_t instruction) noexcept {
+  if (cpu == nullptr || tlb == nullptr)
+    return pack_jit_result(Event::fatal, 0);
+  materialize_semantic_cpu_state(*cpu);
+  if (!arm64::detail::execute_saturating_rounding_multiply_accumulate(
+          *cpu, instruction))
+    return pack_jit_result(Event::illegal_instruction, 0);
+  cpu->pc += sizeof(std::uint32_t);
+  return pack_jit_result(Event::continued, 1);
 }
 
 } // namespace

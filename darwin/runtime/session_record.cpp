@@ -708,6 +708,12 @@ std::string_view host_fault_message(std::string_view output_text) noexcept
 	return message;
 }
 
+void note_diagnostic_output(std::string_view text) noexcept
+{
+	if (!text.empty())
+		keep_output(text.data(), text.size());
+}
+
 void reset_session_record() noexcept
 {
 	session_open.store(false, std::memory_order_release);

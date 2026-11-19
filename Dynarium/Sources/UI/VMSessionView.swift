@@ -17,6 +17,7 @@ private enum ActiveSessionSheet: Int, Identifiable {
 struct VMSessionView: View {
     @EnvironmentObject private var hardware: HostHardwareProfile
     @EnvironmentObject private var session: VMRuntimeSession
+    @EnvironmentObject private var l10n: AppLocalization
     @ObservedObject private var installer = VMRuntimeSession.shared.installer
     @ObservedObject private var pip = VMRuntimeSession.shared.pipController
 
@@ -113,7 +114,7 @@ struct VMSessionView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "thermometer.sun.fill")
                             .font(.caption.weight(.semibold))
-                        Text("Đang tự hạ nhiệt CPU")
+                        Text(l10n.t("session.thermal.banner"))
                             .font(.caption.weight(.semibold))
                     }
                     .foregroundStyle(.orange)
@@ -151,7 +152,7 @@ struct VMSessionView: View {
             if case let .stopping(vmName) = session.phase {
                 StoppingSessionOverlay(
                     vmName: vmName,
-                    detail: session.shutdownStatusDetail ?? "Đang đồng bộ dữ liệu đĩa\u{2026}",
+                    detail: session.shutdownStatusDetail ?? l10n.t("session.stop.syncing_disk"),
                     onForceStop: { session.forceStop() }
                 )
             }
@@ -189,11 +190,11 @@ struct VMSessionView: View {
                     onPick: { url in
                         activeSheet = nil
                         if installer.state.isBusy {
-                            session.errorBannerMessage = "Đang cài một ứng dụng khác. Hãy chờ hoàn tất hoặc bấm Hủy ở thanh tiến trình phía trên."
+                            session.errorBannerMessage = l10n.t("session.error.apk_busy")
                         } else if let vmID = session.activeVM?.id {
                             installer.install(fileURL: url, vmID: vmID, clock: session.adbClock)
                         } else {
-                            session.errorBannerMessage = "Không tìm thấy phiên máy ảo đang chạy để cài đặt \(url.lastPathComponent)."
+                            session.errorBannerMessage = l10n.f("session.error.apk_no_vm", url.lastPathComponent)
                         }
                     },
                     onCancel: {
@@ -204,36 +205,36 @@ struct VMSessionView: View {
             }
         }
         .confirmationDialog(
-            "Tắt máy ảo Android?",
+            l10n.t("session.shutdown.title"),
             isPresented: $confirmingShutdown,
             titleVisibility: .visible
         ) {
-            Button("Tắt nguồn an toàn (reboot -p)") {
+            Button(l10n.t("session.shutdown.clean")) {
                 session.requestCleanShutdown()
             }
-            Button("Dừng nhanh an toàn (Tầng nhân)") {
+            Button(l10n.t("session.shutdown.quick_halt")) {
                 session.requestQuickSafeStop()
             }
             if pip.isSupported {
-                Button("Thu nhỏ PiP (Quay lại sau 0 giây)") {
+                Button(l10n.t("session.shutdown.pip")) {
                     session.togglePiP()
                 }
             }
-            Button("Ép dừng khẩn cấp", role: .destructive) {
+            Button(l10n.t("session.shutdown.force"), role: .destructive) {
                 session.forceStop()
             }
-            Button("Tiếp tục chạy", role: .cancel) {}
+            Button(l10n.t("session.shutdown.keep_running"), role: .cancel) {}
         } message: {
-            Text("Chọn Tắt nguồn an toàn hoặc Dừng nhanh tầng nhân để giải phóng RAM sạch và chạy lại được ngay không bị lỗi.")
+            Text(l10n.t("session.shutdown.message"))
         }
         .alert(
-            "Thông báo phiên chạy",
+            l10n.t("session.alert.title"),
             isPresented: Binding(
                 get: { session.errorBannerMessage != nil },
                 set: { if !$0 { session.errorBannerMessage = nil } }
             )
         ) {
-            Button("Đóng", role: .cancel) { session.errorBannerMessage = nil }
+            Button(l10n.t("common.close"), role: .cancel) { session.errorBannerMessage = nil }
         } message: {
             Text(session.errorBannerMessage ?? "")
         }
@@ -244,6 +245,7 @@ private struct OLEDBlackoutOverlay: View {
     let vmName: String
     let telemetry: VMTelemetrySnapshot
     let onWake: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         ZStack {
@@ -252,15 +254,19 @@ private struct OLEDBlackoutOverlay: View {
                 Image(systemName: "moon.fill")
                     .font(.system(size: 24))
                     .foregroundStyle(Color(white: 0.35))
-                Text("\(vmName) • AFK Eco Mode")
+                Text(l10n.f("session.afk.title", vmName))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(Color(white: 0.45))
                 Text(
-                    "CPU \(Int(telemetry.cpuUtilizationPercent.rounded()))%  •  RAM \(Formats.size(bytes: telemetry.guestRamHeldBytes))"
+                    l10n.f(
+                        "session.afk.stats",
+                        String(Int(telemetry.cpuUtilizationPercent.rounded())),
+                        Formats.size(bytes: telemetry.guestRamHeldBytes)
+                    )
                 )
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(Color(white: 0.32))
-                Text("Chạm đúp vào màn hình để tắt AFK & mở lại hiển thị")
+                Text(l10n.t("session.afk.wake_hint"))
                     .font(.caption2)
                     .foregroundStyle(Color(white: 0.25))
                     .padding(.top, 8)
@@ -276,6 +282,7 @@ private struct ApkInstallBanner: View {
     let state: ApkInstallState
     let onCancel: () -> Void
     let onDismiss: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         HStack(spacing: 12) {
@@ -283,7 +290,7 @@ private struct ApkInstallBanner: View {
             case let .preparing(detail):
                 ProgressView()
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Đang chuẩn bị cài đặt")
+                    Text(l10n.t("apk.preparing_banner"))
                         .font(.subheadline.weight(.semibold))
                     Text(detail)
                         .font(.caption)
@@ -291,14 +298,14 @@ private struct ApkInstallBanner: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Button("Hủy", action: onCancel)
+                Button(l10n.t("common.cancel"), action: onCancel)
                     .font(.caption.weight(.semibold))
 
             case let .transferring(detail, progress):
                 ProgressView(value: progress)
                     .frame(width: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Đang đẩy APK vào Android")
+                    Text(l10n.t("apk.transferring_banner"))
                         .font(.subheadline.weight(.semibold))
                     Text(detail)
                         .font(.caption)
@@ -306,7 +313,7 @@ private struct ApkInstallBanner: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Button("Hủy", action: onCancel)
+                Button(l10n.t("common.cancel"), action: onCancel)
                     .font(.caption.weight(.semibold))
 
             case let .installing(detail):
@@ -322,7 +329,7 @@ private struct ApkInstallBanner: View {
                     .font(.caption.weight(.medium))
                     .lineLimit(2)
                 Spacer()
-                Button("Đóng", action: onDismiss)
+                Button(l10n.t("common.close"), action: onDismiss)
                     .font(.caption.weight(.semibold))
 
             case let .failed(msg):
@@ -332,7 +339,7 @@ private struct ApkInstallBanner: View {
                     .font(.caption.weight(.medium))
                     .lineLimit(3)
                 Spacer()
-                Button("Đóng", action: onDismiss)
+                Button(l10n.t("common.close"), action: onDismiss)
                     .font(.caption.weight(.semibold))
 
             case .idle:
@@ -354,6 +361,7 @@ private struct BootProgressOverlay: View {
     let telemetry: VMTelemetrySnapshot
     let onOpenConsole: () -> Void
     let onDismiss: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     private struct StepItem: Identifiable {
         let id: BootStage
@@ -365,25 +373,25 @@ private struct BootProgressOverlay: View {
         [
             StepItem(
                 id: .preparing,
-                title: "Chuẩn bị đĩa ảo & Hypervisor",
-                detail: "Nạp nhân Linux 6.18 LTS và ánh xạ vùng nhớ"
+                title: l10n.t("session.boot.step1.title"),
+                detail: l10n.t("session.boot.step1.detail")
             ),
             StepItem(
                 id: .kernelBooting,
-                title: "Khởi chạy nhân hệ điều hành",
-                detail: "Nạp trình điều khiển Virtio & hệ thống tệp"
+                title: l10n.t("session.boot.step2.title"),
+                detail: l10n.t("session.boot.step2.detail")
             ),
             StepItem(
                 id: .formattingOrInit,
-                title: isFirstBoot ? "Khởi tạo phân vùng dữ liệu Android" : "Gắn phân vùng & dịch vụ Android",
+                title: isFirstBoot ? l10n.t("session.boot.step3.title_first") : l10n.t("session.boot.step3.title"),
                 detail: isFirstBoot
-                    ? "Lần đầu tạo định dạng F2FS mất khoảng 45–90 giây"
-                    : "Khởi động tiến trình init & các dịch vụ hệ thống"
+                    ? l10n.t("session.boot.step3.detail_first")
+                    : l10n.t("session.boot.step3.detail")
             ),
             StepItem(
                 id: .startingGraphics,
-                title: "Khởi động đồ họa SurfaceFlinger",
-                detail: "Kết xuất giao diện Android lên màn hình"
+                title: l10n.t("session.boot.step4.title"),
+                detail: l10n.t("session.boot.step4.detail")
             ),
         ]
     }
@@ -400,10 +408,10 @@ private struct BootProgressOverlay: View {
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Đang khởi động \(vmName)")
+                        Text(l10n.f("session.boot.title", vmName))
                             .font(.headline)
                             .lineLimit(1)
-                        Text(isFirstBoot ? "Dynarium • Thiết lập lần đầu" : "Dynarium • Android 17")
+                        Text(isFirstBoot ? l10n.t("session.boot.subtitle_first") : l10n.t("session.boot.subtitle"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -441,9 +449,9 @@ private struct BootProgressOverlay: View {
                 Divider()
 
                 HStack {
-                    Text("CPU \(Int(telemetry.cpuUtilizationPercent.rounded()))%")
+                    Text(l10n.f("session.boot.cpu_stat", String(Int(telemetry.cpuUtilizationPercent.rounded()))))
                     Text("•")
-                    Text("RAM đang giữ \(Formats.size(bytes: telemetry.guestRamHeldBytes))")
+                    Text(l10n.f("session.boot.ram_held", Formats.size(bytes: telemetry.guestRamHeldBytes)))
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -451,13 +459,13 @@ private struct BootProgressOverlay: View {
 
                 HStack(spacing: 10) {
                     CenteredActionButton(
-                        title: "Mở Console",
+                        title: l10n.t("session.boot.open_console"),
                         systemImage: "terminal",
                         tone: .tinted,
                         action: onOpenConsole
                     )
                     CenteredActionButton(
-                        title: "Ẩn bảng chờ",
+                        title: l10n.t("session.boot.hide"),
                         systemImage: "eye.slash",
                         tone: .tinted,
                         action: onDismiss
@@ -498,16 +506,17 @@ private struct LowSpacePauseModal: View {
     let spacePause: SpacePause
     let onResume: () -> Void
     let onStop: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.65).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 14) {
-                Label("Cảnh báo bộ nhớ iPhone/iPad đầy", systemImage: "internaldrive.trianglebadge.exclamationmark")
+                Label(l10n.t("session.low_space.title"), systemImage: "internaldrive.trianglebadge.exclamationmark")
                     .font(.headline)
                     .foregroundStyle(.orange)
                 Text(
-                    "Dung lượng trống chỉ còn \(Formats.size(bytes: spacePause.freeBytes)). Dynarium đã tạm dừng máy ảo để bảo vệ ổ đĩa Android không bị hỏng dữ liệu."
+                    l10n.f("session.low_space.body", Formats.size(bytes: spacePause.freeBytes))
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -515,7 +524,7 @@ private struct LowSpacePauseModal: View {
 
                 HStack(spacing: 10) {
                     Button(action: onStop) {
-                        Text("Tắt máy ảo")
+                        Text(l10n.t("session.low_space.stop"))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 38)
                     }
@@ -523,7 +532,7 @@ private struct LowSpacePauseModal: View {
                     .tint(.red)
 
                     Button(action: onResume) {
-                        Text("Thử tiếp tục")
+                        Text(l10n.t("session.low_space.resume"))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 38)
                     }
@@ -542,6 +551,7 @@ private struct StoppingSessionOverlay: View {
     let vmName: String
     let detail: String
     let onForceStop: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         ZStack {
@@ -549,14 +559,14 @@ private struct StoppingSessionOverlay: View {
             VStack(spacing: 14) {
                 ProgressView()
                     .controlSize(.large)
-                Text("Đang tắt \(vmName)")
+                Text(l10n.f("session.stopping.title", vmName))
                     .font(.headline)
                 Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Ép dừng ngay", role: .destructive, action: onForceStop)
+                Button(l10n.t("session.stopping.force_now"), role: .destructive, action: onForceStop)
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.bordered)
                     .padding(.top, 4)
@@ -575,6 +585,7 @@ private struct EndedSessionModal: View {
     let note: String?
     let onOpenConsole: () -> Void
     let onDismiss: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         ZStack {
@@ -584,7 +595,7 @@ private struct EndedSessionModal: View {
                     .font(.system(size: 40))
                     .foregroundStyle(exitCode == 0 ? .green : .orange)
 
-                Text(exitCode == 0 ? "Đã tắt \(vmName)" : "Phiên \(vmName) đã dừng")
+                Text(exitCode == 0 ? l10n.f("session.ended.title_clean", vmName) : l10n.f("session.ended.title_stopped", vmName))
                     .font(.headline)
                     .multilineTextAlignment(.center)
 
@@ -598,14 +609,14 @@ private struct EndedSessionModal: View {
 
                 HStack(spacing: 10) {
                     Button(action: onOpenConsole) {
-                        Text("Xem Console")
+                        Text(l10n.t("session.ended.open_console"))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 38)
                     }
                     .buttonStyle(.bordered)
 
                     Button(action: onDismiss) {
-                        Text("Màn hình chính")
+                        Text(l10n.t("session.ended.home"))
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 38)
                     }
@@ -632,67 +643,70 @@ private struct SessionStatsSheet: View {
     let jitActive: Bool
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var l10n: AppLocalization
 
     private var thermalDescription: (label: String, color: Color) {
         switch thermalState {
         case .nominal:
-            return ("Bình thường", .green)
+            return (l10n.t("session.stats.thermal_nominal"), .green)
         case .fair:
-            return ("Hơi ấm", .secondary)
+            return (l10n.t("session.stats.thermal_fair"), .secondary)
         case .serious:
-            return ("Ấm / Nóng — nên rút sạc hoặc bật Mát máy", .orange)
+            return (l10n.t("session.stats.thermal_serious"), .orange)
         case .critical:
-            return ("Quá nhiệt — đang tự hạ nhiệt", .red)
+            return (l10n.t("session.stats.thermal_critical"), .red)
         @unknown default:
-            return ("Không xác định", .secondary)
+            return (l10n.t("common.unknown"), .secondary)
         }
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Hiệu năng thời gian thực") {
-                    LabeledContent("CPU máy ảo") {
-                        Text(String(format: "%.0f%% (%d vCPU)", telemetry.cpuUtilizationPercent, telemetry.activeVCPUs))
+                Section(l10n.t("session.stats.section_realtime")) {
+                    LabeledContent(l10n.t("session.stats.cpu")) {
+                        let pct = String(Int(telemetry.cpuUtilizationPercent.rounded()))
+                        Text(l10n.f("session.stats.cpu_value", pct, String(telemetry.activeVCPUs)))
                             .monospacedDigit()
                     }
-                    LabeledContent("Tốc độ khung hình") {
+                    LabeledContent(l10n.t("session.stats.fps")) {
                         let targetHz = vm.map { min(max($0.targetDisplayFPS, 60), hardware.maxDisplayRefreshRate) } ?? 60
-                        Text(String(format: "%.1f / %d FPS (%d Hz)", telemetry.fps, targetHz, targetHz))
+                        let fpsStr = String(format: "%.1f", telemetry.fps)
+                        Text(l10n.f("session.stats.fps_value", fpsStr, String(targetHz), String(targetHz)))
                             .monospacedDigit()
                     }
-                    LabeledContent("RAM cấp / đang giữ") {
+                    LabeledContent(l10n.t("session.stats.ram")) {
                         Text("\(Formats.size(bytes: telemetry.guestRamTotalBytes)) / \(Formats.size(bytes: telemetry.guestRamHeldBytes))")
                             .monospacedDigit()
                     }
                 }
 
-                Section("Bộ nhớ Đồ họa (GPU Pool)") {
-                    LabeledContent("Ngân sách GPU tối đa") {
+                Section(l10n.t("session.stats.section_gpu")) {
+                    LabeledContent(l10n.t("session.stats.gpu_budget")) {
                         Text(Formats.size(bytes: telemetry.gpuBudgetBytes))
                             .monospacedDigit()
                     }
-                    LabeledContent("Đang sử dụng") {
+                    LabeledContent(l10n.t("session.stats.gpu_used")) {
                         Text(Formats.size(bytes: telemetry.gpuUsedBytes))
                             .monospacedDigit()
                     }
-                    LabeledContent("Số lần từ chối cấp GPU") {
+                    LabeledContent(l10n.t("session.stats.gpu_refusals")) {
                         Text("\(telemetry.gpuRefusals)")
                             .monospacedDigit()
                             .foregroundStyle(telemetry.gpuRefusals > 0 ? .orange : .secondary)
                     }
                 }
 
-                Section("Kết nối & Hệ thống") {
-                    LabeledContent("Phiên bản ứng dụng") {
+                Section(l10n.t("session.stats.section_system")) {
+                    LabeledContent(l10n.t("session.stats.app_edition")) {
                         Text(hardware.edition.badgeTitle)
                     }
-                    LabeledContent("Động cơ CPU") {
-                        Text(jitActive ? "JIT Compiler (Tốc độ cao)" : "Gadget Engine (Chưa bật JIT)")
+                    LabeledContent(l10n.t("session.stats.cpu_engine")) {
+                        Text(jitActive ? l10n.t("session.stats.cpu_jit") : l10n.t("session.stats.cpu_gadget"))
                             .foregroundStyle(jitActive ? .green : .secondary)
                     }
                     if let vm {
-                        LabeledContent("Backend đồ họa") {
+                        LabeledContent(l10n.t("session.stats.gpu_backend")) {
                             Text(
                                 hardware.edition == .metal4Vulkan
                                     ? "KosmicKrisp + Zink"
@@ -700,27 +714,27 @@ private struct SessionStatsSheet: View {
                             )
                         }
                     }
-                    LabeledContent("Trạng thái nhiệt iOS") {
+                    LabeledContent(l10n.t("session.stats.ios_thermal")) {
                         Text(thermalDescription.label)
                             .foregroundStyle(thermalDescription.color)
                     }
-                    LabeledContent("Chế độ Mát máy") {
-                        Text(coolModeEnabled ? "Đang bật" : (thermalAutoThrottleActive ? "Tự kích hoạt" : "Tắt"))
+                    LabeledContent(l10n.t("session.stats.cool_mode")) {
+                        Text(coolModeEnabled ? l10n.t("common.on") : (thermalAutoThrottleActive ? l10n.t("common.auto_activated") : l10n.t("common.disabled")))
                             .foregroundStyle((coolModeEnabled || thermalAutoThrottleActive) ? Color.accentColor : Color.secondary)
                     }
-                    LabeledContent("ADB qua Wi-Fi") {
-                        Text(adbLanAddress ?? "Đang tắt")
+                    LabeledContent(l10n.t("session.stats.adb_wifi")) {
+                        Text(adbLanAddress ?? l10n.t("common.off"))
                             .font(.subheadline.monospaced())
                             .foregroundStyle(.secondary)
                     }
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Thông số máy ảo")
+            .navigationTitle(l10n.t("session.stats.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Xong") { dismiss() }
+                    Button(l10n.t("common.done")) { dismiss() }
                 }
             }
         }

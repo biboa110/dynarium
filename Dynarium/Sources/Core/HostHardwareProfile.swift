@@ -13,24 +13,24 @@ nonisolated enum DynariumEdition: String, Sendable {
 
     var badgeTitle: String {
         switch self {
-        case .universalSoftware: "Universal iOS 16+"
-        case .metal4Vulkan: "Metal 4 iOS 26+"
+        case .universalSoftware: L10n.t("hardware.edition.universal.badge")
+        case .metal4Vulkan: L10n.t("hardware.edition.metal4.badge")
         }
     }
 
     var badgeShortTitle: String {
         switch self {
-        case .universalSoftware: "Universal"
-        case .metal4Vulkan: "Metal 4"
+        case .universalSoftware: L10n.t("hardware.edition.universal.short")
+        case .metal4Vulkan: L10n.t("hardware.edition.metal4.short")
         }
     }
 
     var descriptionText: String {
         switch self {
         case .universalSoftware:
-            "Phiên bản Phổ thông (iOS 16.0–27+): chạy ổn định bằng Mesa softpipe/llvmpipe trên mọi chip Apple Silicon."
+            L10n.t("hardware.edition.universal.desc")
         case .metal4Vulkan:
-            "Phiên bản Metal 4 (iOS 26.0+): tăng tốc phần cứng Vulkan 1.4 / GLES 3.2 qua KosmicKrisp + Zink."
+            L10n.t("hardware.edition.metal4.desc")
         }
     }
 }
@@ -44,17 +44,17 @@ nonisolated enum PreferredSoftwareBackend: String, Codable, CaseIterable, Identi
 
     var displayName: String {
         switch self {
-        case .auto: "Tự động (Softpipe an toàn)"
-        case .softpipe: "Softpipe (Không cần JIT)"
-        case .llvmpipe: "LLVMpipe (Thử nghiệm)"
+        case .auto: L10n.t("backend.auto.name")
+        case .softpipe: L10n.t("backend.softpipe.name")
+        case .llvmpipe: L10n.t("backend.llvmpipe.name")
         }
     }
 
     var subtitle: String {
         switch self {
-        case .auto: "Dùng softpipe ổn định trên iPhone/iPad thật (CPU JIT vẫn tăng tốc riêng cho CPU Android); tự dùng llvmpipe trên Simulator."
-        case .softpipe: "Thuần CPU interpreter, tương thích mọi thiết bị sideload chưa kích hoạt JIT."
-        case .llvmpipe: "Yêu cầu MAP_JIT từ LLVM; trên thiết bị iOS thật sẽ tự động lùi về softpipe nếu không khởi tạo được."
+        case .auto: L10n.t("backend.auto.subtitle")
+        case .softpipe: L10n.t("backend.softpipe.subtitle")
+        case .llvmpipe: L10n.t("backend.llvmpipe.subtitle")
         }
     }
 }
@@ -188,7 +188,7 @@ final class HostHardwareProfile: ObservableObject {
     }
 
     var chipGenerationLabel: String {
-        if isRunningOnMac { return "Apple Silicon (Mac)" }
+        if isRunningOnMac { return L10n.t("hardware.mac_silicon") }
         let m = machineIdentifier
         if m.hasPrefix("iPhone18,") { return "Apple A19 / A19 Pro" }
         if m.hasPrefix("iPhone17,") { return "Apple A18 / A18 Pro" }
@@ -198,6 +198,8 @@ final class HostHardwareProfile: ObservableObject {
         if m.hasPrefix("iPhone13,") { return "Apple A14 Bionic" }
         if m.hasPrefix("iPhone12,") { return "Apple A13 Bionic" }
         if m.hasPrefix("iPhone11,") { return "Apple A12 Bionic" }
+        if m.hasPrefix("iPhone10,") { return "Apple A11 Bionic" }
+        if m.hasPrefix("iPhone9,") { return "Apple A10 Fusion" }
         if m.hasPrefix("iPad16,") { return "Apple M4" }
         if m.hasPrefix("iPad14,") { return "Apple M2" }
         if m.hasPrefix("iPad13,") { return "Apple M1" }
@@ -380,8 +382,16 @@ final class HostHardwareProfile: ObservableObject {
         let budget = evaluateGpuBudget(memoryMiB: vm.guestMemoryMiB, vcpus: vm.vcpuCount)
 
         if estimatedTotalMiB > safeCeilingMiB || budget.shortOfFloor || riskyRetinaOnLowLimit || exceedsUniversalSafeTarget {
-            let retinaNote = vm.retinaDisplay ? ", Retina" : ""
-            let reason = "Cấu hình hiện tại (\(vm.vcpuCount) vCPU, \(Formats.size(mib: vm.guestMemoryMiB))\(retinaNote)) dễ chạm trần RAM \(Formats.size(mib: limitMiB)) trên thiết bị này. Đề xuất điều chỉnh về \(suggestedVCPUs) vCPU, \(Formats.size(mib: suggestedMemoryMiB)) để chạy ổn định."
+            let retinaNote = vm.retinaDisplay ? L10n.t("hardware.launch_safety.retina_suffix") : ""
+            let reason = L10n.f(
+                "hardware.launch_safety.reason",
+                String(vm.vcpuCount),
+                Formats.size(mib: vm.guestMemoryMiB),
+                retinaNote,
+                Formats.size(mib: limitMiB),
+                String(suggestedVCPUs),
+                Formats.size(mib: suggestedMemoryMiB)
+            )
             return LaunchSafetyAssessment(
                 needsOptimization: true,
                 suggestedVCPUs: suggestedVCPUs,

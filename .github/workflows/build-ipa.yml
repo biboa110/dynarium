@@ -391,30 +391,32 @@ jobs:
           python3 - "$TAG" "$NOTES_FILE" <<'PYEOF'
           import pathlib, sys
           tag, notes_path = sys.argv[1], sys.argv[2]
-          notes = f"""# Dynarium {tag} — Hypervisor Android 17 (LineageOS 24) cho iOS & iPadOS
+          notes = f"""# Dynarium {tag} — Android 17 (LineageOS 24) Hypervisor for iOS & iPadOS
 
-          ## Chọn file `.ipa` phù hợp thiết bị của bạn
+          ## Choose the right `.ipa` for your device
 
-          | Phiên bản `.ipa` | Thiết bị khuyên dùng | Công nghệ đồ họa |
+          | `.ipa` Edition | Recommended Devices | Graphics Backend |
           | :--- | :--- | :--- |
-          | **`Dynarium-{tag}-Metal4-iOS26.ipa`** | **Khuyên dùng cho iOS 26.0 / 27.0+** (iPhone 12 / A14, iPad M1 trở lên) | **Tăng tốc GPU phần cứng Metal 4 / Vulkan 1.4** (`KosmicKrisp + Mesa Zink`), mượt & nhẹ RAM/mát máy hơn |
-          | **`Dynarium-{tag}.ipa`** | **Tương thích rộng iOS 16.0 – iOS 27+** (AltStore, SideStore, TrollStore, mọi chip) | CPU `Mesa softpipe` tối ưu RAM/OpenGL ES 3.0 (`DRAW_USE_LLVM=0`), tự nâng lên `llvmpipe` khi có JIT |
+          | **`Dynarium-{tag}-Metal4-iOS26.ipa`** | **iOS 26.0 / 27.0+** (iPhone 12 / A14, iPad M1+) | **Hardware Vulkan 1.4 / Metal 4** (`KosmicKrisp + Mesa Zink`), fastest & coolest |
+          | **`Dynarium-{tag}.ipa`** | **iOS 16.0 – iOS 27+** (iPhone X / A11+, TrollStore, Esign, AltStore, SideStore) | Safe CPU `Mesa softpipe` (`DRAW_USE_LLVM=0`), works with & without JIT |
 
-          ## Điểm mới trong `{tag}`
+          ## What's New in `{tag}`
 
-          - **Sửa triệt để lỗi crash ngay khi mở app trên iOS 16.x (Esign & TrollStore):** Loại bỏ toàn bộ ký hiệu `std::pmr` (vốn chỉ có từ iOS 17 trong `libc++.1.dylib`) bằng `uml::cpu::pmr` nội tuyến, bật `-Wunguarded-availability-new`, đặt `link: false` cho các framework nạp động, và bổ sung bước kiểm tra `check-ios16-abi.py` lúc đóng gói `.ipa`.
-          - **Đồng bộ thương hiệu Dynarium bên trong Android:** Đổi EDID màn hình, `serialno=dynarium17`, logo chờ boot, bỏ màn hình chào *Andarium Setup Wizard*, và tự cập nhật tên thiết bị `Dynarium` qua VSOCK ADB.
-          - **Mở khóa tần số quét ProMotion 60–120 Hz cho màn hình chính:** Tích hợp `CADisableMinimumFrameDurationOnPhone`, cấp `UML_DISPLAY_REFRESH_HZ` vào EDID Virtio-GPU (60 / 90 / 120 Hz) và `MTKView.preferredFramesPerSecond`, tách biệt hoàn toàn với giới hạn 5–30 FPS của cửa sổ PiP/AFK nền.
-          - **Tối ưu độ mượt & giảm nhiệt kế thừa từ `v1.2.1`:** Chỉ siết `DARWIN_BG` khi iOS chạm `.critical`, nâng Gadget Cache Metal 4 lên `96 MiB`, mặc định bật `Ưu tiên JIT`, và hiển thị trạng thái **Động cơ CPU** trong bảng Thông số.
+          - **Fix Apple A11 / iOS 16 Kernel Panic (`Attempted to kill init! exitcode=0x00000004` / `SIGILL`):**
+            - Narrowed iOS C++ inline-asm compiler flag from `-march=armv8.2-a+fp16+dotprod+crypto+fcma` to `-march=armv8.2-a+fp16+crypto` so carrier threads never emit A12+/A13+ instructions on Apple A11 (`iPhone10,x`).
+            - Added legacy iOS 16 `hw.optional.*` `sysctl` fallbacks (`armv8_1_atomics`, `armv8_crc32`, `neon_fp16`, etc.) when `hw.optional.arm.FEAT_*` OIDs are absent.
+            - Lowered `FEAT_LRCPC` (`LDAPR`) and enabled `FEAT_LRCPC2` (`LDAPUR`/`STLUR`) safely in both JIT and Gadget engines without A12/A13 hardware requirements.
+            - Added software fallbacks in JIT for `FEAT_DotProd` (`SDOT`/`UDOT`/`USDOT`/`SUDOT`), `FEAT_RDM` (`SQRDMLAH`/`SQRDMLSH`), and `FEAT_DIT` (`MSR/MRS DIT`), matching Gadget parity on A11/A12.
+            - Captured guest `SIGILL` diagnostics (`[dynarium-sigill]`) in `session.record` and added friendly Apple A11 Bionic / A10 Fusion labels.
+          - **Full Multi-Language Support & In-App Language Settings:**
+            - Added **App Language** switcher in **Settings** (`System Default`, `English`, `Tiếng Việt`, `简体中文`, `日本語`, `한국어`, `Español`) with instant live switching across the entire app without restarting running VMs.
 
-          ## Hướng dẫn thiết lập nhanh (Mô hình VMware)
+          ## Điểm mới trong `{tag}` (Tiếng Việt)
 
-          1. Cài file `.ipa` tương ứng (khuyên dùng `Metal4-iOS26.ipa` nếu máy chạy iOS 26/27 và chip A14/M1 trở lên).
-          2. Mở tab **Kho ROM** -> bấm **Tải trực tiếp trong app** (hỗ trợ chọn phiên bản hoặc tải từ trang phát hành chính thức / nhập tệp tự custom).
-          3. Sang tab **Máy ảo** -> bấm **+** tạo máy ảo mới (đã tự động căn chuẩn RAM/vCPU an toàn) và khởi động.
-          4. Trong phiên chạy, dùng thanh công cụ nổi để bật **Chế độ Mát máy**, **AFK Eco Mode**, **PiP** hoặc **Cài APK / APKS / APKM**.
+          - **Sửa triệt để lỗi Kernel Panic `Attempted to kill init! exitcode=0x00000004` (`SIGILL`) trên iPhone X (Apple A11) & iOS 16:** Hạ ISA C++ xuống `armv8.2-a+fp16+crypto`, bổ sung sysctl dự phòng cho iOS 16, hạ `LDAPR`/`LDAPUR`/`STLUR` về `LDAR`/helper chuẩn ARMv8.0 trên cả JIT & Gadget, thêm fallback phần mềm cho `DotProd`/`RDM`/`DIT` trong JIT và ghi log `[dynarium-sigill]` vào `session.record`. *(Khuyên dùng `Dynarium-{tag}.ipa` Universal cho iPhone X & iPhone 14 Pro Max chạy iOS 16.)*
+          - **Hỗ trợ Đa Ngôn Ngữ & Cài đặt Ngôn ngữ trực tiếp trong app:** Tự động theo máy hoặc chọn thủ công **English, Tiếng Việt, 简体中文, 日本語, 한국어, Español** trong tab **Cài đặt / Settings**, đổi giao diện tức thì không cần tắt máy ảo.
 
-          > Ghi công cốt lõi: xây dựng trên nền tảng [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) và cảm hứng từ [`ish-app/ish`](https://github.com/ish-app/ish).
+          > Core Attribution: Built upon [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) and inspired by [`ish-app/ish`](https://github.com/ish-app/ish).
           """
           import textwrap
           pathlib.Path(notes_path).write_text(textwrap.dedent(notes), encoding="utf-8")

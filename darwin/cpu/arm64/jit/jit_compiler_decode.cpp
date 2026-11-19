@@ -201,8 +201,6 @@ JitCompiler::Action JitCompiler::emit_instruction(std::uint32_t instruction, std
         (instruction & 0x3f20'0c00U) == 0x1900'0800U)
       return reject();
     if ((instruction & 0x3fff'fc00U) == 0x38bf'c000U) {
-      if (!host_capabilities().has(ArmFeature::lrcpc))
-        return Action::unsupported;
       emit_native_ordered_load(instruction, pc,
                                ColdPath::Action::memory_slow);
       return Action::keep_going;
@@ -213,8 +211,6 @@ JitCompiler::Action JitCompiler::emit_instruction(std::uint32_t instruction, std
       if ((operation == 2U && size == 3U) ||
           (operation == 3U && size >= 2U))
         return reject();
-      if (!host_capabilities().has(ArmFeature::lrcpc2))
-        return Action::unsupported;
       return ordered_memory(operation == 0U);
     }
     /*
@@ -295,8 +291,6 @@ JitCompiler::Action JitCompiler::emit_instruction(std::uint32_t instruction, std
          */
         switch (op2) {
         case 2:
-          if (!translation_supports(ArmFeature::dit))
-            return Action::unsupported;
           store_boolean(offsetof(CpuState, pstate_dit));
           return Action::keep_going;
         case 6:
@@ -1008,8 +1002,12 @@ JitCompiler::Action JitCompiler::emit_instruction(std::uint32_t instruction, std
     if (recognized_simd_dot(instruction)) {
       if (!valid_simd_dot(instruction))
         return reject();
-      if (!emit_simd_dot(instruction))
-        return Action::unsupported;
+      if (!emit_simd_dot(instruction)) {
+        emit_terminal_helper(
+            reinterpret_cast<const void *>(&uml_arm64_jit_execute_simd_dot),
+            instruction, pc, resulting_count);
+        return Action::terminate;
+      }
       return Action::keep_going;
     }
     if (recognized_simd_matrix(instruction)) {
@@ -1029,15 +1027,28 @@ JitCompiler::Action JitCompiler::emit_instruction(std::uint32_t instruction, std
     if (recognized_simd_integer_indexed(instruction)) {
       if (!valid_simd_integer_indexed(instruction))
         return reject();
-      if (!emit_simd_integer_indexed(instruction))
+      if (!emit_simd_integer_indexed(instruction)) {
+        const bool unsigned_group = (instruction & 0x2000'0000U) != 0U;
+        const unsigned operation = (instruction >> 12) & 15U;
+        if (unsigned_group && (operation == 13U || operation == 15U)) {
+          emit_terminal_helper(
+              reinterpret_cast<const void *>(&uml_arm64_jit_execute_simd_rdm),
+              instruction, pc, resulting_count);
+          return Action::terminate;
+        }
         return Action::unsupported;
+      }
       return Action::keep_going;
     }
     if (recognized_simd_rdm(instruction)) {
       if (!valid_simd_rdm(instruction))
         return reject();
-      if (!emit_simd_rdm(instruction))
-        return Action::unsupported;
+      if (!emit_simd_rdm(instruction)) {
+        emit_terminal_helper(
+            reinterpret_cast<const void *>(&uml_arm64_jit_execute_simd_rdm),
+            instruction, pc, resulting_count);
+        return Action::terminate;
+      }
       return Action::keep_going;
     }
     if ((instruction & 0x9f20'fc00U) == 0x0e20'1c00U) {

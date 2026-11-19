@@ -4,10 +4,16 @@ import Combine
 import Foundation
 import GuestHostCore
 
+nonisolated enum CatalogBadgeKind: String, Hashable, Sendable {
+    case latest
+    case stable
+    case online
+}
+
 nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
-    let subtitle: String
+    let subtitleKey: String?
     let androidMajor: String
     let kernelVersion: String
     let pageProfile: String
@@ -17,8 +23,23 @@ nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
     let releaseTag: String
     let sourceName: String
     let sourcePageURL: URL
-    let badgeText: String?
+    let badgeKind: CatalogBadgeKind
     let publishedLabel: String?
+
+    var subtitle: String {
+        if let subtitleKey {
+            return L10n.t(subtitleKey)
+        }
+        return L10n.f("rom.catalog.online.subtitle", releaseTag, sourceName)
+    }
+
+    var badgeText: String {
+        switch badgeKind {
+        case .latest: return L10n.t("rom.badge.latest")
+        case .stable: return L10n.t("rom.badge.stable")
+        case .online: return L10n.t("rom.badge.online")
+        }
+    }
 
     var shortRevision: String {
         if let range = id.range(of: "los24-") {
@@ -31,7 +52,7 @@ nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
         OfficialCatalogImage(
             id: "lineage24-mainline6.18-4k-20261115-los24-r28",
             title: "LineageOS 24 (Android 17)",
-            subtitle: "Bản phát hành r28 cập nhật (Mesa / Vulkan + ARM64 & 32-bit)",
+            subtitleKey: "rom.catalog.r28.subtitle",
             androidMajor: "17",
             kernelVersion: "Linux 6.18 LTS",
             pageProfile: "4 KiB Guest",
@@ -41,13 +62,13 @@ nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
             releaseTag: "1.0b15-release",
             sourceName: "Kernarium Releases",
             sourcePageURL: URL(string: "https://github.com/imxieyi/Kernarium/releases/tag/1.0b15-release")!,
-            badgeText: "Mới nhất",
+            badgeKind: .latest,
             publishedLabel: "2026-11-15"
         ),
         OfficialCatalogImage(
             id: "lineage24-mainline6.18-4k-20261110-los24-r22",
             title: "LineageOS 24 (Android 17)",
-            subtitle: "Bản chuẩn r22 ổn định (Vulkan / Mesa + ARM64 & 32-bit)",
+            subtitleKey: "rom.catalog.r22.subtitle",
             androidMajor: "17",
             kernelVersion: "Linux 6.18 LTS",
             pageProfile: "4 KiB Guest",
@@ -57,7 +78,7 @@ nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
             releaseTag: "1.0b9-beta",
             sourceName: "Kernarium Releases",
             sourcePageURL: URL(string: "https://github.com/imxieyi/Kernarium/releases/tag/1.0b9-beta")!,
-            badgeText: "Ổn định",
+            badgeKind: .stable,
             publishedLabel: "2026-11-10"
         )
     ]
@@ -68,29 +89,31 @@ nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
 nonisolated struct OfficialWebsiteSource: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
-    let subtitle: String
+    let subtitleKey: String
     let url: URL
     let iconName: String
+
+    var subtitle: String { L10n.t(subtitleKey) }
 
     static let all: [OfficialWebsiteSource] = [
         OfficialWebsiteSource(
             id: "kernarium-releases",
             name: "GitHub Releases — Kernarium",
-            subtitle: "Kho ROM chính thức Android 17 / LineageOS 24 (.tar.gz, 4 KiB Page)",
+            subtitleKey: "rom.website.kernarium.sub",
             url: URL(string: "https://github.com/imxieyi/Kernarium/releases")!,
             iconName: "shippingbox"
         ),
         OfficialWebsiteSource(
             id: "dynarium-releases",
             name: "GitHub Releases — Dynarium",
-            subtitle: "Trang phát hành chính thức các bản IPA (Universal & Metal 4)",
+            subtitleKey: "rom.website.dynarium.sub",
             url: URL(string: "https://github.com/userlethekhoi/dynarium/releases")!,
             iconName: "arrow.down.app"
         ),
         OfficialWebsiteSource(
             id: "lineageos-official",
             name: "LineageOS Official",
-            subtitle: "Trang chủ dự án mã nguồn mở LineageOS",
+            subtitleKey: "rom.website.lineage.sub",
             url: URL(string: "https://lineageos.org")!,
             iconName: "globe"
         )
@@ -136,9 +159,9 @@ nonisolated enum ImageInstallPhase: Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .downloading: "Đang tải gói ROM\u{2026}"
-        case .extracting: "Đang giải nén thưa (APFS Sparse)\u{2026}"
-        case .verifyingSHA256: "Đang kiểm tra toàn vẹn SHA-256\u{2026}"
+        case .downloading: L10n.t("rom.phase.downloading")
+        case .extracting: L10n.t("rom.phase.extracting")
+        case .verifyingSHA256: L10n.t("rom.phase.verifying")
         }
     }
 }
@@ -156,11 +179,11 @@ nonisolated enum SystemImageError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .invalidReleaseLayout(let detail):
-            return "Cấu trúc ROM không hợp lệ: \(detail)"
+            return L10n.f("rom.error.invalid_layout", detail)
         case .sha256Mismatch(let expected, let actual):
-            return "Mã kiểm tra SHA-256 không khớp (kỳ vọng \(expected.prefix(12)), thực tế \(actual.prefix(12)))."
+            return L10n.f("rom.error.sha_mismatch", String(expected.prefix(12)), String(actual.prefix(12)))
         case .invalidURL:
-            return "Đường dẫn tải ROM không hợp lệ."
+            return L10n.t("rom.error.invalid_url")
         }
     }
 }
@@ -258,7 +281,7 @@ final class SystemImageStore: NSObject, ObservableObject {
         installFromRemoteURL(
             item.downloadURL,
             preferredName: displayName,
-            sourceDescription: "Kho chính thức (\(item.sourceName) • \(item.releaseTag) • \(item.id))"
+            sourceDescription: L10n.f("rom.source.official", item.sourceName, item.releaseTag, item.id)
         )
     }
 
@@ -306,7 +329,7 @@ final class SystemImageStore: NSObject, ObservableObject {
         }
 
         if succeededFeedCount == 0 {
-            catalogRefreshError = lastErrorDescription ?? "Không thể tải danh sách phiên bản mới từ GitHub."
+            catalogRefreshError = lastErrorDescription ?? L10n.t("rom.catalog.github_fetch_failed")
             return
         }
 
@@ -342,14 +365,14 @@ final class SystemImageStore: NSObject, ObservableObject {
                 throw NSError(
                     domain: "DynariumCatalog",
                     code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "GitHub API tạm giới hạn truy vấn. Vui lòng thử lại sau ít phút hoặc mở trang phát hành."]
+                    userInfo: [NSLocalizedDescriptionKey: L10n.t("rom.catalog.rate_limit")]
                 )
             }
             guard (200..<300).contains(http.statusCode) else {
                 throw NSError(
                     domain: "DynariumCatalog",
                     code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Máy chủ phản hồi mã HTTP \(http.statusCode)."]
+                    userInfo: [NSLocalizedDescriptionKey: L10n.f("rom.catalog.http_status", String(http.statusCode))]
                 )
             }
         }
@@ -384,7 +407,7 @@ final class SystemImageStore: NSObject, ObservableObject {
                         OfficialCatalogImage(
                             id: curated.id,
                             title: curated.title,
-                            subtitle: curated.subtitle,
+                            subtitleKey: curated.subtitleKey,
                             androidMajor: curated.androidMajor,
                             kernelVersion: curated.kernelVersion,
                             pageProfile: curated.pageProfile,
@@ -394,7 +417,7 @@ final class SystemImageStore: NSObject, ObservableObject {
                             releaseTag: curated.releaseTag,
                             sourceName: sourceName,
                             sourcePageURL: pageURL,
-                            badgeText: curated.badgeText,
+                            badgeKind: curated.badgeKind,
                             publishedLabel: release.publishedDateLabel ?? curated.publishedLabel
                         )
                     )
@@ -402,12 +425,12 @@ final class SystemImageStore: NSObject, ObservableObject {
                     let androidMajor = (lower.contains("lineage24") || lower.contains("android17")) ? "17" : "Android"
                     let title = lower.contains("lineage24")
                         ? "LineageOS 24 (Android 17)"
-                        : "Android ROM (\(release.tag_name))"
+                        : L10n.f("rom.title.custom_online", release.tag_name)
                     items.append(
                         OfficialCatalogImage(
                             id: cleanID,
                             title: title,
-                            subtitle: "Phát hành \(release.tag_name) từ \(sourceName)",
+                            subtitleKey: nil,
                             androidMajor: androidMajor,
                             kernelVersion: lower.contains("6.18") ? "Linux 6.18 LTS" : "User-Mode Linux",
                             pageProfile: lower.contains("4k") ? "4 KiB Guest" : "Android ROM",
@@ -417,7 +440,7 @@ final class SystemImageStore: NSObject, ObservableObject {
                             releaseTag: release.tag_name,
                             sourceName: sourceName,
                             sourcePageURL: pageURL,
-                            badgeText: "Trực tuyến",
+                            badgeKind: .online,
                             publishedLabel: release.publishedDateLabel
                         )
                     )
@@ -478,7 +501,7 @@ final class SystemImageStore: NSObject, ObservableObject {
                 try await extractAndRegister(
                     archiveURL: fileURL,
                     preferredName: resolvedName,
-                    sourceDescription: "Nhập từ Tệp (\(fileURL.lastPathComponent))"
+                    sourceDescription: L10n.f("rom.source.files", fileURL.lastPathComponent)
                 )
                 activeInstall = nil
             } catch is CancellationError {
@@ -572,13 +595,13 @@ final class SystemImageStore: NSObject, ObservableObject {
             guard fm.fileExists(atPath: systemImgURL.path),
                   fm.fileExists(atPath: layoutURL.path),
                   fm.fileExists(atPath: cmdlineURL.path) else {
-                throw SystemImageError.invalidReleaseLayout("Thiếu guest/system.img, partition-layout.json hoặc boot/kernel-command-line.txt")
+                throw SystemImageError.invalidReleaseLayout(L10n.t("rom.error.missing_required_files"))
             }
 
             let layoutData = try Data(contentsOf: layoutURL)
             let layout = try JSONDecoder().decode(PartitionLayoutContract.self, from: layoutData)
             guard layout.schemaVersion == 2 else {
-                throw SystemImageError.invalidReleaseLayout("schema_version không khớp (\(layout.schemaVersion))")
+                throw SystemImageError.invalidReleaseLayout(L10n.f("rom.error.schema_mismatch", String(layout.schemaVersion)))
             }
 
             let actualSha = try ArchiveExtractor.sha256Hex(of: systemImgURL)
@@ -632,7 +655,7 @@ final class SystemImageStore: NSObject, ObservableObject {
                 return entry
             }
         }
-        throw SystemImageError.invalidReleaseLayout("Không tìm thấy thư mục guest/system.img trong tệp ROM")
+        throw SystemImageError.invalidReleaseLayout(L10n.t("rom.error.missing_system_img"))
     }
 
     // MARK: - Persistence

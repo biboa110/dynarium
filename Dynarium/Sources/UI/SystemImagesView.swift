@@ -17,6 +17,7 @@ private enum ActiveImageSheet: Int, Identifiable {
 struct SystemImagesView: View {
     @EnvironmentObject private var imageStore: SystemImageStore
     @EnvironmentObject private var vmStore: VirtualMachineStore
+    @EnvironmentObject private var l10n: AppLocalization
 
     @State private var activeSheet: ActiveImageSheet?
     @State private var imagePendingDeletion: SystemImageManifest?
@@ -25,7 +26,7 @@ struct SystemImagesView: View {
         NavigationStack {
             List {
                 if let active = imageStore.activeInstall {
-                    Section("Đang xử lý") {
+                    Section(l10n.t("rom.section.active_install")) {
                         ActiveInstallProgressCard(state: active) {
                             imageStore.cancelActiveInstall()
                         }
@@ -55,7 +56,7 @@ struct SystemImagesView: View {
                     }
                 } header: {
                     HStack {
-                        Text("Kho ROM chính thức")
+                        Text(l10n.t("rom.section.official"))
                         Spacer()
                         if imageStore.isRefreshingCatalog {
                             ProgressView()
@@ -64,20 +65,20 @@ struct SystemImagesView: View {
                     }
                 } footer: {
                     if let last = imageStore.catalogLastRefreshed {
-                        Text("Đã đồng bộ nguồn phát hành chính thức lúc \(last.formatted(date: .omitted, time: .shortened)). Các bản ROM đều giải nén thưa (APFS Sparse) để tiết kiệm dung lượng.")
+                        Text(l10n.f("rom.section.official_footer_synced", last.formatted(date: .omitted, time: .shortened)))
                     } else {
-                        Text("Các bản ROM chính thức từ GitHub Releases (Kernarium / Dynarium) hỗ trợ giải nén dạng thưa (APFS Sparse) để tiết kiệm dung lượng. Kéo xuống để cập nhật danh sách phiên bản mới.")
+                        Text(l10n.t("rom.section.official_footer_default"))
                     }
                 }
 
                 Section {
-                    Text("Bạn có thể tự tải tệp ROM (.tar.gz / .tar.zst) từ website phát hành chính thức hoặc nạp bản ROM tự tùy biến rồi nhập trực tiếp vào máy.")
+                    Text(l10n.t("rom.section.custom_body"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 2)
 
                     CenteredActionButton(
-                        title: "Nhập tệp ROM từ Tệp (Files)",
+                        title: l10n.t("rom.action.import_files"),
                         systemImage: "folder.badge.plus",
                         tone: .tinted,
                         disabled: imageStore.isBusy()
@@ -86,7 +87,7 @@ struct SystemImagesView: View {
                     }
 
                     CenteredActionButton(
-                        title: "Tải từ liên kết URL tùy chỉnh",
+                        title: l10n.t("rom.action.import_url"),
                         systemImage: "link.badge.plus",
                         tone: .tinted,
                         disabled: imageStore.isBusy()
@@ -97,15 +98,15 @@ struct SystemImagesView: View {
                     Button {
                         activeSheet = .customGuide
                     } label: {
-                        Label("Nguồn chính thức & Hướng dẫn Custom ROM", systemImage: "doc.text.magnifyingglass")
+                        Label(l10n.t("rom.action.guide"), systemImage: "doc.text.magnifyingglass")
                     }
                 } header: {
-                    Text("Nhập ROM thủ công & Tự Custom")
+                    Text(l10n.t("rom.section.custom_header"))
                 }
 
                 Section {
                     if imageStore.images.isEmpty {
-                        Text("Chưa có ROM nào trên máy. Bạn có thể tải 1 chạm ở mục trên hoặc nhập tệp .tar.gz / .tar.zst từ Tệp.")
+                        Text(l10n.t("rom.section.installed_empty"))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 4)
@@ -120,17 +121,17 @@ struct SystemImagesView: View {
                                 Button(role: .destructive) {
                                     imagePendingDeletion = image
                                 } label: {
-                                    Label("Xóa", systemImage: "trash")
+                                    Label(l10n.t("common.delete"), systemImage: "trash")
                                 }
                             }
                         }
                     }
                 } header: {
-                    Text("ROM đã cài trên thiết bị (\(imageStore.images.count))")
+                    Text(l10n.f("rom.section.installed", String(imageStore.images.count)))
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Kho ROM")
+            .navigationTitle(l10n.t("rom.nav.title"))
             .refreshable {
                 await imageStore.refreshOfficialCatalog()
             }
@@ -145,7 +146,7 @@ struct SystemImagesView: View {
                         if imageStore.isRefreshingCatalog {
                             ProgressView()
                         } else {
-                            Label("Làm mới nguồn ROM", systemImage: "arrow.clockwise")
+                            Label(l10n.t("rom.toolbar.refresh"), systemImage: "arrow.clockwise")
                         }
                     }
                     .disabled(imageStore.isRefreshingCatalog)
@@ -154,21 +155,21 @@ struct SystemImagesView: View {
                         Button {
                             activeSheet = .filePicker
                         } label: {
-                            Label("Nhập tệp ROM từ Tệp (.tar.gz / .tar.zst)", systemImage: "folder")
+                            Label(l10n.t("rom.menu.import_files"), systemImage: "folder")
                         }
                         Button {
                             activeSheet = .customURL
                         } label: {
-                            Label("Tải từ liên kết URL", systemImage: "link")
+                            Label(l10n.t("rom.menu.import_url"), systemImage: "link")
                         }
                         Divider()
                         Button {
                             activeSheet = .customGuide
                         } label: {
-                            Label("Nguồn chính thức & Custom ROM", systemImage: "doc.text.magnifyingglass")
+                            Label(l10n.t("rom.menu.guide"), systemImage: "doc.text.magnifyingglass")
                         }
                     } label: {
-                        Label("Thêm ROM", systemImage: "plus")
+                        Label(l10n.t("rom.toolbar.add"), systemImage: "plus")
                     }
                     .disabled(imageStore.isBusy())
                 }
@@ -194,18 +195,18 @@ struct SystemImagesView: View {
                 }
             }
             .alert(
-                "Lỗi cài đặt ROM",
+                l10n.t("rom.alert.error_title"),
                 isPresented: Binding(
                     get: { imageStore.lastErrorMessage != nil },
                     set: { if !$0 { imageStore.lastErrorMessage = nil } }
                 )
             ) {
-                Button("Đóng", role: .cancel) { imageStore.lastErrorMessage = nil }
+                Button(l10n.t("common.close"), role: .cancel) { imageStore.lastErrorMessage = nil }
             } message: {
                 Text(imageStore.lastErrorMessage ?? "")
             }
             .confirmationDialog(
-                "Xóa ROM hệ thống?",
+                l10n.t("rom.delete.dialog_title"),
                 isPresented: Binding(
                     get: { imagePendingDeletion != nil },
                     set: { if !$0 { imagePendingDeletion = nil } }
@@ -213,19 +214,19 @@ struct SystemImagesView: View {
                 titleVisibility: .visible
             ) {
                 if let img = imagePendingDeletion {
-                    Button("Xóa ROM này", role: .destructive) {
+                    Button(l10n.t("rom.delete.confirm"), role: .destructive) {
                         imageStore.deleteImage(img)
                         imagePendingDeletion = nil
                     }
                 }
-                Button("Hủy", role: .cancel) { imagePendingDeletion = nil }
+                Button(l10n.t("common.cancel"), role: .cancel) { imagePendingDeletion = nil }
             } message: {
                 if let img = imagePendingDeletion {
                     let refs = vmStore.countVMsUsingImage(img.id)
                     Text(
                         refs > 0
-                            ? "Đang có \(refs) máy ảo liên kết tới ROM này. Sau khi xóa bạn cần gán ROM khác trước khi khởi động lại chúng."
-                            : "Xóa gói hệ điều hành \(img.name) để giải phóng bộ nhớ trên máy."
+                            ? l10n.f("rom.delete.message_in_use", String(refs))
+                            : l10n.f("rom.delete.message_unused", img.name)
                     )
                 }
             }
@@ -236,6 +237,7 @@ struct SystemImagesView: View {
 private struct ActiveInstallProgressCard: View {
     let state: ImageInstallState
     let onCancel: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -248,7 +250,7 @@ private struct ActiveInstallProgressCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Hủy", role: .cancel, action: onCancel)
+                Button(l10n.t("common.cancel"), role: .cancel, action: onCancel)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
@@ -278,11 +280,11 @@ private struct ActiveInstallProgressCard: View {
             case let .extracting(fraction, entry, sparseSaved):
                 ProgressView(value: fraction)
                 HStack {
-                    Text(entry.isEmpty ? "Đang giải nén\u{2026}" : entry)
+                    Text(entry.isEmpty ? l10n.t("rom.extract.working") : entry)
                         .lineLimit(1)
                     Spacer()
                     if sparseSaved > 0 {
-                        Text("Tiết kiệm APFS: \(Formats.size(bytes: sparseSaved))")
+                        Text(l10n.f("rom.extract.apfs_saved", Formats.size(bytes: sparseSaved)))
                             .monospacedDigit()
                     }
                 }
@@ -291,7 +293,7 @@ private struct ActiveInstallProgressCard: View {
 
             case .verifyingSHA256:
                 ProgressView()
-                Text("Đang tính mã băm SHA-256 của guest/system.img\u{2026}")
+                Text(l10n.t("rom.verify.sha_hint"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -305,14 +307,15 @@ private struct CatalogRowView: View {
     let alreadyInstalled: Bool
     let disabled: Bool
     let onDownload: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     private var badgeTint: Color {
-        switch item.badgeText {
-        case "Mới nhất":
+        switch item.badgeKind {
+        case .latest:
             return .accentColor
-        case "Trực tuyến":
+        case .online:
             return .teal
-        default:
+        case .stable:
             return .indigo
         }
     }
@@ -338,7 +341,7 @@ private struct CatalogRowView: View {
                         if alreadyInstalled {
                             HStack(spacing: 4) {
                                 Image(systemName: "checkmark.circle.fill")
-                                Text("Đã cài")
+                                Text(l10n.t("rom.badge.installed"))
                             }
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.green)
@@ -346,8 +349,8 @@ private struct CatalogRowView: View {
                             .padding(.vertical, 3)
                             .background(Color.green.opacity(0.14), in: Capsule())
                             .fixedSize()
-                        } else if let badge = item.badgeText {
-                            Text(badge)
+                        } else {
+                            Text(item.badgeText)
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(badgeTint)
                                 .padding(.horizontal, 8)
@@ -389,7 +392,7 @@ private struct CatalogRowView: View {
 
             VStack(spacing: 8) {
                 CenteredActionButton(
-                    title: alreadyInstalled ? "Tải thêm bản sao" : "Tải trực tiếp trong app",
+                    title: alreadyInstalled ? l10n.t("rom.action.download_another") : l10n.t("rom.action.download_in_app"),
                     systemImage: "square.and.arrow.down",
                     tone: alreadyInstalled ? .tinted : .prominent,
                     disabled: disabled,
@@ -397,7 +400,7 @@ private struct CatalogRowView: View {
                 )
 
                 Link(destination: item.sourcePageURL) {
-                    Label("Mở trang phát hành chính thức", systemImage: "safari")
+                    Label(l10n.t("rom.action.open_release_page"), systemImage: "safari")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Color.accentColor)
                         .frame(maxWidth: .infinity)
@@ -420,6 +423,7 @@ private struct InstalledImageRow: View {
     let image: SystemImageManifest
     let allocatedBytes: UInt64
     let dependentVMCount: Int
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -437,10 +441,10 @@ private struct InstalledImageRow: View {
             HStack(spacing: 10) {
                 Text("Android \(image.androidMajor)")
                 Text("•")
-                Text("Thật: \(Formats.size(bytes: allocatedBytes))")
+                Text(l10n.f("rom.installed.actual_size", Formats.size(bytes: allocatedBytes)))
                     .monospacedDigit()
                 Text("•")
-                Text("Dùng bởi \(dependentVMCount) VM")
+                Text(l10n.f("rom.installed.used_by", String(dependentVMCount)))
                     .monospacedDigit()
             }
             .font(.caption)
@@ -456,6 +460,7 @@ private struct InstalledImageRow: View {
 
 private struct CustomRomGuideSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         NavigationStack {
@@ -485,39 +490,39 @@ private struct CustomRomGuideSheet: View {
                         }
                     }
                 } header: {
-                    Text("Website phát hành chính thức & an toàn")
+                    Text(l10n.t("rom.guide.section_sites"))
                 } footer: {
-                    Text("Chỉ nên tải tệp ROM từ kho phát hành chính thức trên GitHub Releases hoặc tự biên dịch từ mã nguồn LineageOS để đảm bảo toàn vẹn SHA-256.")
+                    Text(l10n.t("rom.guide.section_sites_footer"))
                 }
 
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Lưu trữ dưới dạng .tar.gz, .tgz hoặc .tar.zst với các tệp bên trong:")
+                        Text(l10n.t("rom.guide.archive_req"))
                             .font(.subheadline)
-                        Text("• guest/system.img (hoặc guest/super.img)\n• guest/partition-layout.json\n• boot/kernel-command-line.txt")
+                        Text("• guest/system.img (or guest/super.img)\n• guest/partition-layout.json\n• boot/kernel-command-line.txt")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Yêu cầu kỹ thuật 4 KiB Guest Page")
+                        Text(l10n.t("rom.guide.page_req_title"))
                             .font(.subheadline.weight(.medium))
-                        Text("Android Runtime và linker 64/32-bit cần phân vùng gốc định dạng 4 KiB để tương thích hoàn toàn với User-Mode Linux Mainline 6.18.")
+                        Text(l10n.t("rom.guide.page_req_body"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
                 } header: {
-                    Text("Cấu trúc gói ROM tự custom")
+                    Text(l10n.t("rom.guide.section_layout"))
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Nguồn & Custom ROM")
+            .navigationTitle(l10n.t("rom.guide.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Xong") {
+                    Button(l10n.t("common.done")) {
                         dismiss()
                     }
                 }

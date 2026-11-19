@@ -33,25 +33,25 @@ nonisolated enum ApkInstallState: Equatable, Sendable {
 }
 
 nonisolated enum PackageErrorMessages {
-    private static let table: [(codes: [String], message: String)] = [
+    private static let table: [(codes: [String], key: String)] = [
         (["PARSE_FAILED_NOT_APK", "FAILED_INVALID_APK", "PARSE_FAILED_BAD_MANIFEST", "PARSE_FAILED_MANIFEST_MALFORMED"],
-         "Tệp không phải là gói ứng dụng Android hợp lệ."),
+         "apk.err.invalid_apk"),
         (["PARSE_FAILED_NO_CERTIFICATES", "PARSE_FAILED_INCONSISTENT_CERTIFICATES", "PARSE_FAILED_CERTIFICATE_ENCODING"],
-         "Ứng dụng không có chữ ký hợp lệ."),
+         "apk.err.no_certs"),
         (["FAILED_UPDATE_INCOMPATIBLE", "FAILED_SHARED_USER_INCOMPATIBLE"],
-         "Bản cài hiện có trên máy dùng chữ ký khác. Hãy gỡ cài đặt bản cũ trước."),
+         "apk.err.sig_mismatch"),
         (["FAILED_VERSION_DOWNGRADE"],
-         "Máy ảo đã cài sẵn phiên bản mới hơn của ứng dụng này."),
+         "apk.err.downgrade"),
         (["FAILED_OLDER_SDK"],
-         "Ứng dụng yêu cầu phiên bản Android mới hơn bản đang chạy."),
+         "apk.err.older_sdk"),
         (["FAILED_NO_MATCHING_ABIS"],
-         "Ứng dụng không có mã thực thi tương thích CPU ARM của máy ảo."),
+         "apk.err.no_abi"),
         (["FAILED_INSUFFICIENT_STORAGE"],
-         "Ổ dữ liệu máy ảo (data.img) không còn đủ dung lượng trống."),
+         "apk.err.no_space"),
         (["FAILED_MISSING_SPLIT"],
-         "Thiếu thành phần split APK trong gói cài đặt."),
+         "apk.err.missing_split"),
         (["FAILED_DUPLICATE_PACKAGE", "FAILED_CONFLICTING_PROVIDER"],
-         "Xung đột tên gói hoặc nhà cung cấp nội dung với app đã cài."),
+         "apk.err.duplicate"),
     ]
 
     static func failureMessage(in output: String) -> String? {
@@ -59,12 +59,15 @@ nonisolated enum PackageErrorMessages {
         if lines.contains(where: { $0.hasPrefix("Success") }) { return nil }
         guard let failureLine = lines.last(where: { $0.hasPrefix("Failure") }),
               let open = failureLine.firstIndex(of: "[") else {
-            return "Android không thể hoàn tất cài đặt (\(output.trimmingCharacters(in: .whitespacesAndNewlines)))."
+            return L10n.f("apk.err.generic", output.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let inside = failureLine[failureLine.index(after: open)...]
         let rawCode = inside.prefix { $0 != ":" && $0 != "]" }.trimmingCharacters(in: .whitespaces)
         let code = rawCode.hasPrefix("INSTALL_") ? String(rawCode.dropFirst("INSTALL_".count)) : rawCode
-        return table.first { $0.codes.contains(code) }?.message ?? "Cài đặt thất bại (\(code))."
+        if let entry = table.first(where: { $0.codes.contains(code) }) {
+            return L10n.t(entry.key)
+        }
+        return L10n.f("apk.err.code", code)
     }
 }
 
@@ -82,13 +85,13 @@ final class ApkInstaller: ObservableObject {
         guard !state.isBusy else { return }
         let ext = fileURL.pathExtension.lowercased()
         guard Self.supportedExtensions.contains(ext) else {
-            state = .failed("Định dạng tệp \(fileURL.lastPathComponent) không được hỗ trợ. Hãy chọn tệp .apk, .apks, .apkm, .xapk hoặc .zip.")
+            state = .failed(L10n.f("apk.unsupported", fileURL.lastPathComponent))
             return
         }
 
         let coordinator = ApkFileCoordinatorBox()
         activeCoordinator = coordinator
-        state = .preparing("Đang đọc tệp \(fileURL.lastPathComponent) từ Tệp / iCloud\u{2026}")
+        state = .preparing(L10n.f("apk.reading", fileURL.lastPathComponent))
 
         activeTask = Task {
             let scoped = fileURL.startAccessingSecurityScopedResource()
@@ -182,7 +185,7 @@ final class ApkInstaller: ObservableObject {
         let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
         guard size >= 4 else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Tệp \(url.lastPathComponent) rỗng hoặc tải chưa hoàn tất."
+                NSLocalizedDescriptionKey: L10n.f("apk.empty_or_incomplete", url.lastPathComponent)
             ])
         }
         let fh = try FileHandle(forReadingFrom: url)
@@ -191,7 +194,7 @@ final class ApkInstaller: ObservableObject {
         guard magic.count == 4,
               magic[0] == 0x50, magic[1] == 0x4B, magic[2] == 0x03, magic[3] == 0x04 else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "Tệp \(url.lastPathComponent) không phải gói APK/ZIP hợp lệ (hoặc tải chưa hoàn tất)."
+                NSLocalizedDescriptionKey: L10n.f("apk.not_zip", url.lastPathComponent)
             ])
         }
     }
@@ -205,17 +208,17 @@ final class ApkInstaller: ObservableObject {
         let size = (attrs[.size] as? NSNumber)?.intValue ?? 0
         guard size > 0 else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Tệp APK rỗng hoặc không hợp lệ."
+                NSLocalizedDescriptionKey: L10n.t("apk.empty_file")
             ])
         }
         let totalLabel = Formats.size(bytes: UInt64(size))
         try session.run { conn in
             try streamSingleApkToAbb(handleURL: url, size: size, connection: conn, watchdog: session.watchdog, onState: onState) { sent in
                 let frac = min(max(Double(sent) / Double(size), 0), 1)
-                onState(.transferring(detail: "\(url.lastPathComponent) (\(Formats.size(bytes: UInt64(sent))) / \(totalLabel))", progress: frac * 0.85))
+                onState(.transferring(detail: L10n.f("apk.transfer_single", url.lastPathComponent, Formats.size(bytes: UInt64(sent)), totalLabel), progress: frac * 0.85))
             }
         }
-        return "Đã cài đặt xong \(url.lastPathComponent)."
+        return L10n.f("apk.installed_single", url.lastPathComponent)
     }
 
     nonisolated private static func installSplitBundle(
@@ -227,11 +230,11 @@ final class ApkInstaller: ObservableObject {
             .appendingPathComponent("dynarium-splits-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
-        onState(.preparing("Đang tách bộ cài split từ \(url.lastPathComponent)\u{2026}"))
+        onState(.preparing(L10n.f("apk.extracting_splits", url.lastPathComponent)))
         let extracted = try ZipArchiveReader.extractSplitApks(from: url, to: scratch)
         guard !extracted.isEmpty else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "Không tìm thấy tệp .apk nào bên trong gói \(url.lastPathComponent)."
+                NSLocalizedDescriptionKey: L10n.f("apk.no_apks_in_bundle", url.lastPathComponent)
             ])
         }
         let splits = filterCompatibleSplits(extracted)
@@ -243,7 +246,7 @@ final class ApkInstaller: ObservableObject {
             let createStream = try conn.open("abb_exec:package\0install-create\0-r\0-t\0-S\0\(totalSize)")
             let createOut = String(decoding: try createStream.readToEnd(limit: 16 * 1024), as: UTF8.self)
             guard let sessionID = parseSessionID(from: createOut) else {
-                throw AdbError.remote("Không thể tạo phiên cài đặt split: \(createOut)")
+                throw AdbError.remote(L10n.f("apk.split_create_failed", createOut))
             }
 
             var uploadedBytes: UInt64 = 0
@@ -260,7 +263,7 @@ final class ApkInstaller: ObservableObject {
                     defer { try? fh.close() }
 
                     onState(.transferring(
-                        detail: "\(split.fileName) (\(idx + 1)/\(splits.count)) • \(Formats.size(bytes: uploadedBytes)) / \(totalLabel)",
+                        detail: L10n.f("apk.transfer_split", split.fileName, String(idx + 1), String(splits.count), Formats.size(bytes: uploadedBytes), totalLabel),
                         progress: totalSize > 0 ? Double(uploadedBytes) / Double(totalSize) * 0.85 : 0
                     ))
 
@@ -276,7 +279,7 @@ final class ApkInstaller: ObservableObject {
                             lastReportedBytes = uploadedBytes
                             let frac = totalSize > 0 ? Double(uploadedBytes) / Double(totalSize) * 0.85 : 0.5
                             onState(.transferring(
-                                detail: "\(split.fileName) (\(idx + 1)/\(splits.count)) • \(Formats.size(bytes: uploadedBytes)) / \(totalLabel)",
+                                detail: L10n.f("apk.transfer_split", split.fileName, String(idx + 1), String(splits.count), Formats.size(bytes: uploadedBytes), totalLabel),
                                 progress: frac
                             ))
                         }
@@ -287,7 +290,7 @@ final class ApkInstaller: ObservableObject {
                     }
                 }
 
-                onState(.installing("Android đang hợp nhất & biên dịch ứng dụng\u{2026}"))
+                onState(.installing(L10n.t("apk.installing_bundle")))
                 session.watchdog.arm(idle: nil, overall: 15 * 60)
                 let commitStream = try conn.open("abb_exec:package\0install-commit\0\(sessionID)")
                 let commitOut = String(decoding: try commitStream.readToEnd(limit: 32 * 1024), as: UTF8.self)
@@ -300,7 +303,7 @@ final class ApkInstaller: ObservableObject {
                 throw error
             }
         }
-        return "Đã cài đặt xong gói \(url.lastPathComponent) (\(splits.count) thành phần)."
+        return L10n.f("apk.installed_bundle", url.lastPathComponent, String(splits.count))
     }
 
     nonisolated private static func filterCompatibleSplits(_ splits: [ZipSplitApkEntry]) -> [ZipSplitApkEntry] {
@@ -364,7 +367,7 @@ final class ApkInstaller: ObservableObject {
         } catch AdbError.streamClosed {
             // Package manager aborted early; read remaining diagnostic message below.
         }
-        onState(.installing("Android đang cài đặt \(handleURL.lastPathComponent)\u{2026}"))
+        onState(.installing(L10n.f("apk.installing_single", handleURL.lastPathComponent)))
         watchdog.arm(idle: nil, overall: 15 * 60)
         let output = String(decoding: try stream.readToEnd(limit: 64 * 1024), as: UTF8.self)
         if let err = PackageErrorMessages.failureMessage(in: output) {

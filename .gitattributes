@@ -48,6 +48,7 @@ meson_options.txt text eol=lf
 *.m text eol=lf
 *.mm text eol=lf
 *.swift text eol=lf
+*.strings text eol=lf
 
 # Android build / policy files.
 *.bp text eol=lf

@@ -6,6 +6,7 @@ import SwiftUI
 struct AddSystemImageSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var imageStore: SystemImageStore
+    @EnvironmentObject private var l10n: AppLocalization
 
     @State private var romName: String = ""
     @State private var urlString: String = ""
@@ -15,15 +16,15 @@ struct AddSystemImageSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Tên hiển thị (vd: LineageOS Custom)", text: $romName)
+                    TextField(l10n.t("rom.add_url.name_placeholder"), text: $romName)
                     TextField("https://example.com/android-rom.tar.gz", text: $urlString)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Nguồn tải ROM")
+                    Text(l10n.t("rom.add_url.section_header"))
                 } footer: {
-                    Text("Hỗ trợ tệp nén .tar.gz, .tar.zst hoặc .tar chứa guest/system.img, guest/partition-layout.json và boot/kernel-command-line.txt.")
+                    Text(l10n.t("rom.add_url.section_footer"))
                 }
 
                 if let validationMessage {
@@ -34,14 +35,14 @@ struct AddSystemImageSheet: View {
                     }
                 }
             }
-            .navigationTitle("Tải ROM từ URL")
+            .navigationTitle(l10n.t("rom.add_url.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Hủy") { dismiss() }
+                    Button(l10n.t("common.cancel")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Tải xuống") {
+                    Button(l10n.t("rom.add_url.download")) {
                         startDownload()
                     }
                     .disabled(urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -56,15 +57,15 @@ struct AddSystemImageSheet: View {
               let scheme = url.scheme?.lowercased(),
               scheme == "https" || scheme == "http",
               url.host != nil else {
-            validationMessage = "Vui lòng nhập đường dẫn http:// hoặc https:// hợp lệ."
+            validationMessage = l10n.t("rom.add_url.invalid_url")
             return
         }
         let cleanName = romName.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedName = cleanName.isEmpty ? url.deletingPathExtension().lastPathComponent : cleanName
         imageStore.installFromRemoteURL(
             url,
-            preferredName: resolvedName.isEmpty ? "ROM tùy chỉnh" : resolvedName,
-            sourceDescription: "URL: \(url.host ?? trimmedURL)"
+            preferredName: resolvedName.isEmpty ? l10n.t("rom.add_url.default_custom_name") : resolvedName,
+            sourceDescription: l10n.f("rom.source.url", url.host ?? trimmedURL)
         )
         dismiss()
     }

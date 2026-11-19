@@ -465,7 +465,13 @@ void JitCompiler::emit_native_ordered_load(std::uint32_t instruction,
     emit_translate(8, Access::read, slow, fault, 1);
     const auto native_destination =
         write_native_gpr(destination, false, false, 9);
-    emitter_.emit((instruction & ~((31U << 5) | 31U)) | (8U << 5) |
+    /* Hosts without FEAT_LRCPC (e.g. Apple A11) still execute ARMv8.0 LDAR
+     * natively, which supplies strictly stronger acquire semantics. */
+    std::uint32_t emitted_instruction = instruction;
+    if ((instruction & 0x3fff'fc00U) == 0x38bf'c000U &&
+        !host_capabilities().has(ArmFeature::lrcpc))
+      emitted_instruction = (instruction & 0xc000'0000U) | 0x08df'fc00U;
+    emitter_.emit((emitted_instruction & ~((31U << 5) | 31U)) | (8U << 5) |
                   native_destination.host);
     commit_native_gpr(native_destination, destination, false);
   }

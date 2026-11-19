@@ -9,6 +9,7 @@ struct DynariumApp: App {
     @StateObject private var imageStore = SystemImageStore.shared
     @StateObject private var vmStore = VirtualMachineStore.shared
     @StateObject private var session = VMRuntimeSession.shared
+    @StateObject private var localization = AppLocalization.shared
 
     @State private var selectedTab: MainTab = .machines
     @State private var incomingNotice: String?
@@ -27,17 +28,19 @@ struct DynariumApp: App {
                 .environmentObject(imageStore)
                 .environmentObject(vmStore)
                 .environmentObject(session)
+                .environmentObject(localization)
+                .environment(\.locale, localization.locale)
                 .onOpenURL { url in
                     handleIncomingFile(url)
                 }
                 .alert(
-                    "Tệp nhập vào Dynarium",
+                    localization.t("app.import.alert_title"),
                     isPresented: Binding(
                         get: { incomingNotice != nil },
                         set: { if !$0 { incomingNotice = nil } }
                     )
                 ) {
-                    Button("Đã hiểu", role: .cancel) { incomingNotice = nil }
+                    Button(localization.t("common.ok"), role: .cancel) { incomingNotice = nil }
                 } message: {
                     Text(incomingNotice ?? "")
                 }
@@ -50,7 +53,7 @@ struct DynariumApp: App {
             if let vm = session.activeVM, session.phase.isActive {
                 session.installer.install(fileURL: url, vmID: vm.id, clock: session.adbClock)
             } else {
-                incomingNotice = "Hãy khởi động một máy ảo Android trước rồi dùng nút Cài APK trong thanh điều khiển để cài \(url.lastPathComponent)."
+                incomingNotice = localization.f("app.import.need_running_vm", url.lastPathComponent)
             }
             return
         }
@@ -60,6 +63,6 @@ struct DynariumApp: App {
             imageStore.importLocalArchive(at: url)
             return
         }
-        incomingNotice = "Không nhận diện được định dạng tệp \(url.lastPathComponent)."
+        incomingNotice = localization.f("app.import.unrecognized_format", url.lastPathComponent)
     }
 }

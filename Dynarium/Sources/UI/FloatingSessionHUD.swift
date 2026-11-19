@@ -10,6 +10,7 @@ struct FloatingSessionHUD: View {
     @Binding var confirmingShutdown: Bool
 
     @EnvironmentObject private var session: VMRuntimeSession
+    @EnvironmentObject private var l10n: AppLocalization
     @ObservedObject private var pip = VMRuntimeSession.shared.pipController
 
     var body: some View {
@@ -42,13 +43,13 @@ struct FloatingSessionHUD: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        HUDButton(icon: "chevron.backward", label: "Back") {
+                        HUDButton(icon: "chevron.backward", label: l10n.t("hud.back")) {
                             session.sendHardwareKey(158) // KEY_BACK
                         }
-                        HUDButton(icon: "circle", label: "Home") {
+                        HUDButton(icon: "circle", label: l10n.t("hud.home")) {
                             session.sendHardwareKey(172) // KEY_HOMEPAGE
                         }
-                        HUDButton(icon: "power", label: "Nguồn") {
+                        HUDButton(icon: "power", label: l10n.t("hud.power")) {
                             session.sendHardwareKey(116) // KEY_POWER
                         }
 
@@ -56,20 +57,20 @@ struct FloatingSessionHUD: View {
 
                         HUDButton(
                             icon: session.keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard",
-                            label: "Phím",
+                            label: l10n.t("hud.keyboard"),
                             active: session.keyboardVisible
                         ) {
                             session.keyboardVisible.toggle()
                         }
 
-                        HUDButton(icon: "square.and.arrow.down.on.square", label: "Cài APK") {
+                        HUDButton(icon: "square.and.arrow.down.on.square", label: l10n.t("hud.install_apk")) {
                             presentingApkImporter = true
                         }
 
                         if pip.isSupported {
                             HUDButton(
                                 icon: pip.isActive ? "pip.exit" : "pip.enter",
-                                label: "PiP",
+                                label: l10n.t("hud.pip"),
                                 active: pip.isActive
                             ) {
                                 session.togglePiP()
@@ -78,7 +79,7 @@ struct FloatingSessionHUD: View {
 
                         HUDButton(
                             icon: session.afkEcoMode ? "moon.fill" : "moon",
-                            label: "AFK Eco",
+                            label: l10n.t("hud.afk_eco"),
                             active: session.afkEcoMode
                         ) {
                             session.setAfkEcoMode(!session.afkEcoMode)
@@ -90,20 +91,20 @@ struct FloatingSessionHUD: View {
                             Button {
                                 presentingStats = true
                             } label: {
-                                Label("Thông số CPU / RAM / GPU", systemImage: "gauge.medium")
+                                Label(l10n.t("hud.menu.stats"), systemImage: "gauge.medium")
                             }
 
                             Button {
                                 presentingConsole = true
                             } label: {
-                                Label("Cửa sổ Serial Console", systemImage: "terminal")
+                                Label(l10n.t("hud.menu.console"), systemImage: "terminal")
                             }
 
                             Button {
                                 session.setCoolMode(!session.coolModeEnabled)
                             } label: {
                                 Label(
-                                    session.coolModeEnabled ? "Tắt chế độ Mát máy" : "Bật chế độ Mát máy",
+                                    session.coolModeEnabled ? l10n.t("hud.menu.cool_off") : l10n.t("hud.menu.cool_on"),
                                     systemImage: session.coolModeEnabled ? "thermometer.snowflake" : "thermometer.medium"
                                 )
                             }
@@ -112,7 +113,7 @@ struct FloatingSessionHUD: View {
                                 session.setMicrophone(enabled: !session.microphoneOn)
                             } label: {
                                 Label(
-                                    session.microphoneOn ? "Tắt Micro Android" : "Bật Micro Android",
+                                    session.microphoneOn ? l10n.t("hud.menu.mic_off") : l10n.t("hud.menu.mic_on"),
                                     systemImage: session.microphoneOn ? "mic.fill" : "mic.slash"
                                 )
                             }
@@ -121,7 +122,7 @@ struct FloatingSessionHUD: View {
                                 session.setAdbOverLan(enabled: session.adbLanAddress == nil)
                             } label: {
                                 Label(
-                                    session.adbLanAddress == nil ? "Bật ADB qua Wi-Fi" : "Tắt ADB Wi-Fi (\(session.adbLanAddress ?? ""))",
+                                    session.adbLanAddress == nil ? l10n.t("hud.menu.adb_on") : l10n.f("hud.menu.adb_off", session.adbLanAddress ?? ""),
                                     systemImage: "wifi"
                                 )
                             }
@@ -129,13 +130,13 @@ struct FloatingSessionHUD: View {
                             Button {
                                 session.sendHardwareKey(115) // KEY_VOLUMEUP
                             } label: {
-                                Label("Tăng âm lượng", systemImage: "speaker.plus")
+                                Label(l10n.t("hud.menu.vol_up"), systemImage: "speaker.plus")
                             }
 
                             Button {
                                 session.sendHardwareKey(114) // KEY_VOLUMEDOWN
                             } label: {
-                                Label("Giảm âm lượng", systemImage: "speaker.minus")
+                                Label(l10n.t("hud.menu.vol_down"), systemImage: "speaker.minus")
                             }
 
                             Divider()
@@ -143,13 +144,13 @@ struct FloatingSessionHUD: View {
                             Button(role: .destructive) {
                                 confirmingShutdown = true
                             } label: {
-                                Label("Tắt máy ảo", systemImage: "power")
+                                Label(l10n.t("hud.menu.power_off"), systemImage: "power")
                             }
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "ellipsis.circle")
                                     .font(.system(size: 16, weight: .semibold))
-                                Text("Thêm")
+                                Text(l10n.t("common.more"))
                                     .font(.caption.weight(.medium))
                             }
                             .padding(.horizontal, 10)

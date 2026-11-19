@@ -3,6 +3,8 @@
 import SwiftUI
 
 struct AboutCreditsView: View {
+    @EnvironmentObject private var l10n: AppLocalization
+
     var body: some View {
         List {
             Section {
@@ -18,13 +20,13 @@ struct AboutCreditsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Dynarium")
                                 .font(.title2.bold())
-                            Text("Android 17 trên iOS & iPadOS")
+                            Text(l10n.t("credits.subtitle"))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
 
-                    Text("Trình quản lý và ảo hóa đa máy ảo Android 17 (LineageOS 24) dành cho iOS 16.0 – iOS 27+, xây dựng theo mô hình VMware với kho ROM tách rời và giao diện chuẩn Apple HIG.")
+                    Text(l10n.t("credits.summary"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -32,45 +34,45 @@ struct AboutCreditsView: View {
                 .padding(.vertical, 4)
             }
 
-            Section("Nền tảng cốt lõi & Ghi công") {
+            Section(l10n.t("credits.section.core")) {
                 CreditRow(
                     title: "imxieyi/Kernarium",
-                    role: "Runtime cốt lõi, Linux 6.18 UML + Gadget Engine, giải pháp Anti-Jetsam & Virtio Android (GPL-2.0-or-later)",
+                    role: l10n.t("credits.kernarium.role"),
                     urlString: "https://github.com/imxieyi/Kernarium"
                 )
                 CreditRow(
                     title: "ish-app/ish",
-                    role: "Cảm hứng kỹ thuật threaded interpreter / Gadget execution và ánh xạ trang nhớ trên Darwin/iOS (GPL-3.0 / trích xuất hợp lệ)",
+                    role: l10n.t("credits.ish.role"),
                     urlString: "https://github.com/ish-app/ish"
                 )
             }
 
-            Section("Thành phần mã nguồn mở đi kèm") {
+            Section(l10n.t("credits.section.oss")) {
                 CreditRow(
                     title: "Linux Mainline 6.18 LTS & LineageOS 24",
-                    role: "Nhân hệ điều hành và hệ thống Android 17 (4 KiB guest pages)",
+                    role: l10n.t("credits.linux.role"),
                     urlString: nil
                 )
                 CreditRow(
                     title: "Mesa 3D (KosmicKrisp, Zink, LLVMpipe, Softpipe), virglrenderer & libepoxy",
-                    role: "Đồ họa 3D Vulkan / Metal 4 và bộ dựng hình CPU an toàn trên iOS 16+",
+                    role: l10n.t("credits.mesa.role"),
                     urlString: nil
                 )
                 CreditRow(
                     title: "libslirp, GLib, libzstd & GPT fdisk",
-                    role: "Mạng SLiRP thân thiện quyền riêng tư DNS iOS, giải nén Zstandard & phân vùng GPT",
+                    role: l10n.t("credits.slirp.role"),
                     urlString: nil
                 )
             }
 
-            Section("Giấy phép phân phối") {
-                Text("Mã nguồn phần Host/Hypervisor được phát hành theo giấy phép GPL-2.0-or-later. Phần lớp phủ/cấu hình khách Android theo giấy phép Apache-2.0.")
+            Section(l10n.t("credits.section.license")) {
+                Text(l10n.t("credits.license.body"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Ghi công & Nguồn mở")
+        .navigationTitle(l10n.t("credits.nav.title"))
         .navigationBarTitleDisplayMode(.inline)
     }
 }

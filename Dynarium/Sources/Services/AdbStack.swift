@@ -22,27 +22,27 @@ nonisolated enum AdbError: Error, Equatable, Sendable {
     var localizedMessage: String {
         switch self {
         case .refused:
-            return "Dịch vụ ADB trong Android chưa sẵn sàng (máy đang khởi động hoặc chưa bật Gỡ lỗi USB)."
+            return L10n.t("adb.err.refused")
         case .notAnswering:
-            return "Không nhận được phản hồi từ Android qua VSOCK."
+            return L10n.t("adb.err.not_answering")
         case .guestGone:
-            return "Kết nối tới Android đã đóng."
+            return L10n.t("adb.err.guest_gone")
         case .timedOut:
-            return "Quá thời gian chờ phản hồi từ Android."
+            return L10n.t("adb.err.timed_out")
         case .cancelled:
-            return "Thao tác đã bị hủy."
+            return L10n.t("adb.err.cancelled")
         case .keyRejected:
-            return "Android từ chối khóa xác thực ADB của máy ảo này."
+            return L10n.t("adb.err.key_rejected")
         case .serviceRefused(let svc):
-            return "Android từ chối mở dịch vụ: \(svc)"
+            return L10n.f("adb.err.service_refused", svc)
         case .streamClosed:
-            return "Luồng truyền dữ liệu ADB đã đóng sớm."
+            return L10n.t("adb.err.stream_closed")
         case .protocolViolation(let detail):
-            return "Lỗi giao thức ADB: \(detail)"
+            return L10n.f("adb.err.protocol_violation", detail)
         case .remote(let detail):
-            return "Android báo lỗi: \(detail)"
+            return L10n.f("adb.err.remote", detail)
         case .io(let code):
-            return "Lỗi kết nối I/O: \(String(cString: strerror(code)))"
+            return L10n.f("adb.err.io", String(cString: strerror(code)))
         }
     }
 }
@@ -301,7 +301,7 @@ nonisolated struct SecKeySigner: AdbSigner, @unchecked Sendable {
     func sign(token: Data) throws -> Data {
         let alg = SecKeyAlgorithm.rsaSignatureDigestPKCS1v15SHA1
         guard SecKeyIsAlgorithmSupported(key, .sign, alg) else {
-            throw AdbError.protocolViolation("Khóa RSA không hỗ trợ ký ADB")
+            throw AdbError.protocolViolation(L10n.t("adb.err.rsa_unsupported"))
         }
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(key, alg, token as CFData, &error) else {

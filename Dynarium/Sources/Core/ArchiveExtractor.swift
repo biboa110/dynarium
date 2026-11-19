@@ -35,15 +35,15 @@ nonisolated enum ArchiveExtractorError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .unsupportedFormat:
-            return "Định dạng tệp ROM không được hỗ trợ (hỗ trợ .tar.gz, .tar.zst, .tar)."
+            return L10n.t("archive.error.unsupported")
         case .openFailed(let detail):
-            return "Không thể mở tệp: \(detail)"
+            return L10n.f("archive.error.open_failed", detail)
         case .corruptedArchive(let detail):
-            return "Tệp lưu trữ bị hỏng hoặc không đầy đủ: \(detail)"
+            return L10n.f("archive.error.corrupted", detail)
         case .unsafePath(let path):
-            return "Đường dẫn trong gói không an toàn: \(path)"
+            return L10n.f("archive.error.unsafe_path", path)
         case .ioError(let code, let context):
-            return "Lỗi ghi tệp (\(context)): \(String(cString: strerror(code)))"
+            return L10n.f("archive.error.io", context, String(cString: strerror(code)))
         }
     }
 }
@@ -262,7 +262,7 @@ nonisolated enum ArchiveExtractor {
             consumed += UInt64(count)
         }
         if lastReturn != 0 {
-            throw ArchiveExtractorError.corruptedArchive("Luồng Zstandard kết thúc trước khi hoàn tất")
+            throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zstd_truncated"))
         }
     }
 }
@@ -457,7 +457,7 @@ private nonisolated final class TarStreamSink {
             }
         }
         guard storedChecksum == UInt64(computedSum) else {
-            throw ArchiveExtractorError.corruptedArchive("TAR header checksum không khớp")
+            throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.tar_checksum"))
         }
 
         let nameField = extractCString(block[0..<100])
@@ -722,7 +722,7 @@ nonisolated enum ZipArchiveReader {
 
         let totalSize = try handle.seekToEnd()
         guard totalSize >= 22 else {
-            throw ArchiveExtractorError.corruptedArchive("Tệp ZIP quá nhỏ")
+            throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zip_too_small"))
         }
 
         let tailSize = Int(min(totalSize, 66_000))
@@ -730,14 +730,14 @@ nonisolated enum ZipArchiveReader {
         let tail = try handle.read(upToCount: tailSize) ?? Data()
 
         guard let eocdOffset = findEOCD(in: tail) else {
-            throw ArchiveExtractorError.corruptedArchive("Không tìm thấy End of Central Directory trong tệp APK/APKS")
+            throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zip_eocd"))
         }
 
         let cdCount = Int(readLE16(tail, eocdOffset + 10))
         let cdSize = Int(readLE32(tail, eocdOffset + 12))
         let cdOffset = UInt64(readLE32(tail, eocdOffset + 16))
         guard cdOffset + UInt64(cdSize) <= totalSize else {
-            throw ArchiveExtractorError.corruptedArchive("Central Directory vượt kích thước tệp")
+            throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zip_cd"))
         }
 
         try handle.seek(toOffset: cdOffset)
@@ -816,7 +816,7 @@ nonisolated enum ZipArchiveReader {
         try handle.seek(toOffset: localHeaderOffset)
         let localHdr = try handle.read(upToCount: 30) ?? Data()
         guard localHdr.count == 30, readLE32(localHdr, 0) == 0x0403_4B50 else {
-            throw ArchiveExtractorError.corruptedArchive("Local File Header ZIP không hợp lệ")
+            throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zip_lh"))
         }
         let nameLen = UInt64(readLE16(localHdr, 26))
         let extraLen = UInt64(readLE16(localHdr, 28))
@@ -834,7 +834,7 @@ nonisolated enum ZipArchiveReader {
             while remaining > 0 {
                 try Task.checkCancellation()
                 let chunk = try handle.read(upToCount: Int(min(remaining, 512 * 1024))) ?? Data()
-                if chunk.isEmpty { throw ArchiveExtractorError.corruptedArchive("ZIP entry kết thúc sớm") }
+                if chunk.isEmpty { throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zip_early_eof")) }
                 try writeFd(outFd, data: chunk, name: destination.lastPathComponent)
                 remaining -= UInt64(chunk.count)
             }
@@ -842,7 +842,7 @@ nonisolated enum ZipArchiveReader {
         }
 
         guard method == 8 else {
-            throw ArchiveExtractorError.corruptedArchive("Phương thức nén ZIP không hỗ trợ: \(method)")
+            throw ArchiveExtractorError.corruptedArchive(L10n.f("archive.error.zip_method", String(method)))
         }
 
         var strm = z_stream()
@@ -859,7 +859,7 @@ nonisolated enum ZipArchiveReader {
         while remaining > 0 && !ended {
             try Task.checkCancellation()
             let chunk = try handle.read(upToCount: Int(min(remaining, 256 * 1024))) ?? Data()
-            if chunk.isEmpty { throw ArchiveExtractorError.corruptedArchive("ZIP deflate bị cắt cụt") }
+            if chunk.isEmpty { throw ArchiveExtractorError.corruptedArchive(L10n.t("archive.error.zip_deflate_truncated")) }
             remaining -= UInt64(chunk.count)
 
             var mutableChunk = chunk

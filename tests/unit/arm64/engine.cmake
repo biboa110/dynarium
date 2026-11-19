@@ -18,7 +18,8 @@
         $<TARGET_OBJECTS:uml_arm64_aarch32_semantics>
         $<TARGET_OBJECTS:uml_arm64_jit_test_support>
         $<TARGET_OBJECTS:uml_static_guest_memory>
-        $<TARGET_OBJECTS:uml_runtime_context>)
+        $<TARGET_OBJECTS:uml_runtime_context>
+        $<TARGET_OBJECTS:uml_runtime_session_record>)
     if(TARGET uml_x86_64_gadgets)
         list(APPEND UML_STATIC_RUNTIME_TEST_BASE_OBJECTS
             $<TARGET_OBJECTS:uml_x86_64_target>

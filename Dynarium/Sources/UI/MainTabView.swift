@@ -11,6 +11,7 @@ enum MainTab: Hashable {
 struct MainTabView: View {
     @Binding var selectedTab: MainTab
     @EnvironmentObject private var session: VMRuntimeSession
+    @EnvironmentObject private var l10n: AppLocalization
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -19,19 +20,19 @@ struct MainTabView: View {
                 selectedTab = .images
             })
             .tabItem {
-                Label("Máy ảo", systemImage: "desktopcomputer")
+                Label(l10n.t("tab.machines"), systemImage: "desktopcomputer")
             }
             .tag(MainTab.machines)
 
             SystemImagesView()
                 .tabItem {
-                    Label("Kho ROM", systemImage: "internaldrive")
+                    Label(l10n.t("tab.images"), systemImage: "internaldrive")
                 }
                 .tag(MainTab.images)
 
             SettingsView()
                 .tabItem {
-                    Label("Cài đặt", systemImage: "gearshape")
+                    Label(l10n.t("tab.settings"), systemImage: "gearshape")
                 }
                 .tag(MainTab.settings)
         }

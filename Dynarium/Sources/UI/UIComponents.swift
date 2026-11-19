@@ -59,6 +59,7 @@ struct Metal4RecommendationBanner: View {
     let chipLabel: String
     let osVersion: String
     let onDismiss: () -> Void
+    @EnvironmentObject private var l10n: AppLocalization
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -72,14 +73,14 @@ struct Metal4RecommendationBanner: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Khuyên dùng bản Metal 4 cho iOS \(osVersion)")
+                Text(l10n.f("machines.banner.metal4.title", osVersion))
                     .font(.subheadline.weight(.semibold))
-                Text("\(chipLabel) hỗ trợ tăng tốc GPU Vulkan 1.4 qua gói Metal4-iOS26.ipa (mượt và nhẹ RAM hơn). Bản Universal hiện tại vẫn chạy an toàn bằng CPU.")
+                Text(l10n.f("machines.banner.metal4.body", chipLabel))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Link(destination: URL(string: "https://github.com/userlethekhoi/dynarium/releases/latest")!) {
-                    Label("Mở trang tải Metal4-iOS26.ipa", systemImage: "arrow.down.circle")
+                    Label(l10n.t("machines.banner.metal4.cta"), systemImage: "arrow.down.circle")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
                         .padding(.horizontal, 10)
@@ -105,7 +106,7 @@ struct Metal4RecommendationBanner: View {
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Ẩn gợi ý")
+            .accessibilityLabel(l10n.t("machines.banner.metal4.dismiss"))
         }
         .padding(.vertical, 4)
     }

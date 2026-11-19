@@ -79,14 +79,15 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET ${_uml_effective_deployment_target}
     CACHE STRING "Deployment target" FORCE)
 
 # The macOS arm64 default target enables the optional mnemonics used by the
-# existing assembly bodies. iOS defaults to a more conservative baseline, so
-# expose the required option to the CPU implementation and apply it globally
-# only to standalone assembly sources. Ordinary C and C++ targets retain the
-# platform baseline. Runtime feature selection remains the sole authority for
-# executing optional host operations.
+# existing assembly bodies. Standalone assembly (.S) uses runtime-dispatched
+# CPU feature selection up through dotprod/fcma, whereas C++ translation units
+# containing inline assembly only use armv8.2-a + fp16 + crypto instructions and
+# must remain safe on Apple A11 Bionic (iPhone 8 / X on iOS 16).
 if(NOT UML_APPLE_PLATFORM STREQUAL "macos")
-    set(UML_APPLE_CPU_INLINE_ASM_COMPILE_OPTION
+    set(UML_APPLE_CPU_ASM_COMPILE_OPTION
         "-march=armv8.2-a+fp16+dotprod+crypto+fcma")
+    set(UML_APPLE_CPU_INLINE_ASM_COMPILE_OPTION
+        "-march=armv8.2-a+fp16+crypto")
     add_compile_options(
-        $<$<COMPILE_LANGUAGE:ASM>:${UML_APPLE_CPU_INLINE_ASM_COMPILE_OPTION}>)
+        $<$<COMPILE_LANGUAGE:ASM>:${UML_APPLE_CPU_ASM_COMPILE_OPTION}>)
 endif()

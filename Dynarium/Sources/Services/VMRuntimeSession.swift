@@ -297,7 +297,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
         let selectRC = kernarium_runtime_loader_select(UInt32(KERNARIUM_RUNTIME_GUEST_ANDROID))
         guard selectRC == 0 else {
-            runtimeDidExit(code: selectRC, message: "Không thể nạp framework runtime Android (\(selectRC)).")
+            runtimeDidExit(code: selectRC, message: L10n.f("session.error.framework_select", String(selectRC)))
             return
         }
 
@@ -522,7 +522,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             phase = .ended(
                 vmName: name,
                 exitCode: 0,
-                note: "Máy ảo đã tắt nguồn an toàn. Bạn có thể khởi động lại ngay."
+                note: L10n.t("session.exit.clean")
             )
             return
         }
@@ -531,23 +531,23 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             let releaseFailed = runtimeDetail.contains("chua thu hoi duoc vung nho nhan")
             processRequiresRestart = releaseFailed
             let detailLine = runtimeDetail.isEmpty
-                ? "Android khởi động lại liên tục 5 lần nên hypervisor đã dừng bảo vệ."
+                ? L10n.t("session.exit.restart_loop_fallback")
                 : runtimeDetail
             phase = .ended(
                 vmName: name,
                 exitCode: code,
-                note: "\(detailLine).\n\nHãy mở Serial Console để xem dòng log cuối trước khi tự khởi động lại. Nếu data.img bị lỗi sau lần dừng đột ngột trước đó, thử 'Đặt lại dữ liệu (Wipe)' trong menu máy ảo."
+                note: L10n.f("session.exit.restart_loop_note", detailLine)
             )
             return
         }
 
         if code == -3 {
             processRequiresRestart = true
-            let detailSuffix = runtimeDetail.isEmpty ? "" : "\n\nChi tiết: \(runtimeDetail)"
+            let detailSuffix = runtimeDetail.isEmpty ? "" : L10n.f("session.exit.detail_suffix", runtimeDetail)
             phase = .ended(
                 vmName: name,
                 exitCode: code,
-                note: "Phiên trước chưa giải phóng hết bộ nhớ nhân Linux trong tiến trình iOS (mã -3). Hãy vuốt đóng hoàn toàn ứng dụng Dynarium trong trình đa nhiệm rồi mở lại.\(detailSuffix)"
+                note: L10n.f("session.exit.code_minus3", detailSuffix)
             )
             return
         }
@@ -558,7 +558,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 phase = .ended(
                     vmName: name,
                     exitCode: code,
-                    note: "Đã ép dừng khẩn cấp máy ảo. Hãy vuốt đóng và mở lại ứng dụng Dynarium trước khi bật máy ảo mới để đảm bảo vùng nhớ nhân sạch."
+                    note: L10n.t("session.exit.force_stopped_minus4")
                 )
                 return
             }
@@ -566,19 +566,19 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 phase = .ended(
                     vmName: name,
                     exitCode: code,
-                    note: "Thiết bị chưa được cấp không gian địa chỉ 64 GiB (Extended Virtual Addressing) khi ký ứng dụng nên không thể khởi tạo vùng nhớ nhân Linux (mã -4). Trên iOS 16 hãy cài IPA qua TrollStore hoặc chứng chỉ giữ nguyên entitlements."
+                    note: L10n.t("session.exit.no_eva")
                 )
                 return
             }
             if !runtimeDetail.isEmpty {
-                phase = .ended(vmName: name, exitCode: code, note: "\(runtimeDetail) (mã -4).")
+                phase = .ended(vmName: name, exitCode: code, note: L10n.f("session.exit.ended_detail", runtimeDetail, "-4"))
                 return
             }
             let recordSummary = activeVM.flatMap { vmStore.lastSessionSummary(for: $0.id) }
             phase = .ended(
                 vmName: name,
                 exitCode: code,
-                note: recordSummary ?? "Hypervisor không thể khởi tạo máy ảo trên thiết bị này (mã -4). Mở Console để xem chi tiết."
+                note: recordSummary ?? L10n.t("session.exit.init_generic_minus4")
             )
             return
         }
@@ -587,23 +587,23 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             phase = .ended(
                 vmName: name,
                 exitCode: code,
-                note: "Không đủ bộ nhớ khả dụng (Out of Memory, mã -2). Hãy giảm RAM máy ảo trong cấu hình."
+                note: L10n.t("session.exit.oom_minus2")
             )
             return
         }
 
         if code == -1 {
             let note = runtimeDetail.isEmpty
-                ? "Tham số khởi chạy máy ảo không hợp lệ (mã -1)."
-                : "\(runtimeDetail) (mã -1)."
+                ? L10n.t("session.exit.invalid_args_minus1")
+                : L10n.f("session.exit.ended_detail", runtimeDetail, "-1")
             phase = .ended(vmName: name, exitCode: code, note: note)
             return
         }
 
         if code == 126 {
             let note = runtimeDetail.isEmpty
-                ? "Không thể nạp nhân Linux nhúng (__TEXT,__uml_elf, mã 126). Hãy mở Console hoặc cài đặt lại gói IPA."
-                : "Không thể nạp nhân Linux nhúng (__TEXT,__uml_elf, mã 126): \(runtimeDetail)"
+                ? L10n.t("session.exit.elf_load_126")
+                : L10n.f("session.exit.elf_load_126_detail", runtimeDetail)
             phase = .ended(
                 vmName: name,
                 exitCode: code,
@@ -614,8 +614,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
         let recordSummary = activeVM.flatMap { vmStore.lastSessionSummary(for: $0.id) }
         let fallbackNote = !runtimeDetail.isEmpty
-            ? "\(runtimeDetail) (mã \(code))."
-            : (recordSummary ?? "Phiên máy ảo kết thúc (mã \(code)).")
+            ? L10n.f("session.exit.ended_detail", runtimeDetail, String(code))
+            : (recordSummary ?? L10n.f("session.exit.ended_generic", String(code)))
         phase = .ended(vmName: name, exitCode: code, note: fallbackNote)
     }
 
@@ -633,7 +633,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     func requestCleanShutdown() {
         guard let vm = activeVM, phase.isActive else { return }
         phase = .stopping(vmName: vm.name)
-        shutdownStatusDetail = "Đang gửi lệnh tắt nguồn an toàn tới Android (reboot -p)\u{2026}"
+        shutdownStatusDetail = L10n.t("session.stop.sending_reboot")
         Task.detached(priority: .userInitiated) { [weak self, adbClock] in
             var adbSent = false
             if let identity = try? AdbKeyStore.forVM(vm.id).loadOrCreate() {
@@ -654,7 +654,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             }
             await MainActor.run { [weak self] in
                 guard let self, case .stopping = self.phase else { return }
-                self.shutdownStatusDetail = "Android chưa tự tắt — đang dừng sạch ở tầng nhân Linux\u{2026}"
+                self.shutdownStatusDetail = L10n.t("session.stop.kernel_halt")
             }
             await self?.performCleanKernelHalt()
         }
@@ -663,7 +663,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     func requestQuickSafeStop() {
         guard let vm = activeVM, phase.isActive else { return }
         phase = .stopping(vmName: vm.name)
-        shutdownStatusDetail = "Đang đồng bộ ổ đĩa và dừng sạch nhân Linux\u{2026}"
+        shutdownStatusDetail = L10n.t("session.stop.syncing_halt")
         Task.detached(priority: .userInitiated) { [weak self] in
             await self?.performCleanKernelHalt()
         }
@@ -698,7 +698,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         if let name = activeVM?.name {
             phase = .stopping(vmName: name)
         }
-        shutdownStatusDetail = "Đang ép dừng khẩn cấp máy ảo\u{2026}"
+        shutdownStatusDetail = L10n.t("session.stop.force_stopping")
         runtimeQueue.async {
             _ = kernarium_runtime_loader_sync()
             kernarium_runtime_loader_request_stop()
@@ -777,7 +777,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         case .denied:
             microphoneOn = false
             _ = kernarium_runtime_loader_set_microphone(0)
-            errorBannerMessage = "Quyền Micro bị từ chối trong Cài đặt iOS."
+            errorBannerMessage = L10n.t("session.error.mic_denied")
         }
     }
 
@@ -796,7 +796,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 let ip = LanAddress.currentIPv4() ?? "127.0.0.1"
                 adbLanAddress = "\(ip):\(port)"
             } catch {
-                errorBannerMessage = "Không thể mở cổng ADB Wi-Fi (5555): \(error.localizedDescription)"
+                errorBannerMessage = L10n.f("session.error.adb_lan_failed", error.localizedDescription)
             }
         }
     }
