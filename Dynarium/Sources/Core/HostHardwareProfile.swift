@@ -105,7 +105,6 @@ final class HostHardwareProfile: ObservableObject {
     @Published private(set) var debuggerAttached: Bool = false
 
     static func configureProcessEnvironmentBeforeFirstUse() {
-        let availBytes = dynarium_available_memory_bytes()
         let hasKosmicKrisp: Bool = {
             guard let frameworksURL = Bundle.main.privateFrameworksURL else { return false }
             return FileManager.default.fileExists(
@@ -115,9 +114,6 @@ final class HostHardwareProfile: ObservableObject {
 
         if hasKosmicKrisp {
             setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1)
-            if availBytes > 0 && availBytes < 2_800 * Bytes.mib {
-                setenv("UML_GPU_IDLE_TRIM_MS", "400", 1)
-            }
             return
         }
 

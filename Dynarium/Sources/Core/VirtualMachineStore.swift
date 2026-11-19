@@ -224,7 +224,7 @@ final class VirtualMachineStore: ObservableObject {
             bootMode: .auto,
             microphoneEnabled: false,
             adbOverLan: false,
-            preferJitIfAvailable: hardware.debuggerAttached,
+            preferJitIfAvailable: true,
             softwareBackend: .auto,
             afkFrameRateLimit: 10,
             afkBlackoutEnabled: true,
@@ -242,7 +242,7 @@ final class VirtualMachineStore: ObservableObject {
         cfg.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: safeVCPUs)
         cfg.retinaDisplay = hardware.defaultRetinaDisplay()
         cfg.softwareBackend = .auto
-        cfg.preferJitIfAvailable = hardware.debuggerAttached
+        cfg.preferJitIfAvailable = true
         save(cfg)
         try? FileManager.default.removeItem(at: sessionRecordURL(for: id))
         objectWillChange.send()

@@ -158,7 +158,8 @@ struct VMSessionView: View {
                 adbLanAddress: session.adbLanAddress,
                 thermalState: session.thermalState,
                 coolModeEnabled: session.coolModeEnabled,
-                thermalAutoThrottleActive: session.thermalAutoThrottleActive
+                thermalAutoThrottleActive: session.thermalAutoThrottleActive,
+                jitActive: session.jitActiveInSession
             )
         }
         .fileImporter(
@@ -557,6 +558,7 @@ private struct SessionStatsSheet: View {
     let thermalState: ProcessInfo.ThermalState
     let coolModeEnabled: Bool
     let thermalAutoThrottleActive: Bool
+    let jitActive: Bool
 
     @Environment(\.dismiss) private var dismiss
 
@@ -567,9 +569,9 @@ private struct SessionStatsSheet: View {
         case .fair:
             return ("Hơi ấm", .secondary)
         case .serious:
-            return ("Nóng — đang tự hạ nhiệt", .orange)
+            return ("Ấm / Nóng — nên rút sạc hoặc bật Mát máy", .orange)
         case .critical:
-            return ("Quá nhiệt — siết CPU/FPS", .red)
+            return ("Quá nhiệt — đang tự hạ nhiệt", .red)
         @unknown default:
             return ("Không xác định", .secondary)
         }
@@ -612,6 +614,10 @@ private struct SessionStatsSheet: View {
                 Section("Kết nối & Hệ thống") {
                     LabeledContent("Phiên bản ứng dụng") {
                         Text(hardware.edition.badgeTitle)
+                    }
+                    LabeledContent("Động cơ CPU") {
+                        Text(jitActive ? "JIT Compiler (Tốc độ cao)" : "Gadget Engine (Chưa bật JIT)")
+                            .foregroundStyle(jitActive ? .green : .secondary)
                     }
                     if let vm {
                         LabeledContent("Backend đồ họa") {

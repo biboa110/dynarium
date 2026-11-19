@@ -1086,6 +1086,12 @@ private:
 
 namespace {
 
+#if UML_GPU_SOFTWARE_RENDERER
+constexpr std::uint64_t tightHostGadgetCacheMiB = 64ULL;
+#else
+constexpr std::uint64_t tightHostGadgetCacheMiB = 96ULL;
+#endif
+
 /* What a launch asked for, as the guest needs it at every boot. */
 struct GuestRequest final {
     std::uint32_t dotsPerInch {};
@@ -1364,7 +1370,9 @@ private:
             arguments.emplace_back(
                 "--session-record=" + request_.sessionRecordPath);
         if (request_.tightMemoryHost) {
-            arguments.emplace_back("--gadget-cache-budget=64M");
+            arguments.emplace_back(
+                "--gadget-cache-budget=" +
+                std::to_string(tightHostGadgetCacheMiB) + "M");
         }
 #ifndef UML_APP_STORE_RUNTIME
         if (request_.jitCacheBudget != 0) {
@@ -1570,9 +1578,9 @@ uml::emulator::GpuBudgetPlan planGpuBudget(
     auto plan = uml::emulator::plan_gpu_budget(
         static_cast<std::uint64_t>(guestMemoryMiB) * mebibyte,
         /* The host sets the limit; a launch states neither it; on tight-memory
-         * iOS hosts the runtime caps the gadget cache to 64 MiB. */
+         * iOS hosts the runtime caps the gadget cache (64 MiB software, 96 MiB Metal 4). */
         0,
-        isTightMemoryHost() ? static_cast<std::size_t>(64ULL * mebibyte) : 0,
+        isTightMemoryHost() ? static_cast<std::size_t>(tightHostGadgetCacheMiB * mebibyte) : 0,
         guestProcessorCount,
         {
             .application = boot->gpu_budget_application_mib * mebibyte,

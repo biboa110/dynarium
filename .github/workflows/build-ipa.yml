@@ -402,10 +402,10 @@ jobs:
 
           ## Điểm mới trong `{tag}`
 
-          - **Giảm mạnh mức chiếm RAM chống Jetsam OOM & màn hình đen:** Khi chạy trên máy có trần RAM tiến trình <= 2.8 GiB, tự động giới hạn bộ nhớ đệm Gadget Engine xuống `64 MiB`, tắt tải trước shader/GL của Zygote (`guest_disable_renderer_preload=true`), khóa `GLES 3.0` (`196608`) & `vulkan=none` cho bộ dựng hình CPU `softpipe`, rút gọn bộ nhớ nhàn rỗi GPU (`UML_GPU_IDLE_TRIM_MS`), hạ trần khuyên dùng mặc định về `768 MiB` và bật tỉa trang RAM tự động.
-          - **Theo dõi nhiệt độ thời gian thực & Chế độ Mát máy:** Tự động phát hiện mức nhiệt `.serious` / `.critical` từ iOS để điều tiết CPU/FPS chống quá nhiệt, kèm nút bật nhanh **Chế độ Mát máy** trong cấu hình và thanh công cụ nổi.
-          - **Kho ROM đa phiên bản chính thức & Custom ROM:** Hiển thị nhiều bản phát hành chính thức (`los24-r28` mới nhất & `los24-r22` ổn định), hỗ trợ kéo để làm mới danh sách từ GitHub Releases chính thức, mở trực tiếp trang phát hành gốc và nhập tệp ROM tự custom (`.tar.gz` / `.tar.zst` / URL) kèm hướng dẫn cấu trúc.
-          - **Chẩn đoán phiên chạy chi tiết:** Phân tích thành phần đỉnh RAM (Guest / Đồ họa / Cache / Malloc) và xem nhanh nhật ký kernel cuối phiên ngay trong danh sách máy ảo.
+          - **Tối ưu độ mượt & giảm giật lag trên Metal 4 (`v1.2.1`):** Gỡ bỏ ép hạ lõi tiết kiệm `DARWIN_BG` khi iOS mới ở mức nhiệt `.serious` (chỉ tự siết khẩn cấp ở mức `.critical`), ngừng tỉa page-cache liên tục khi chạy foreground trên Metal 4, gỡ bỏ cắt GPU idle `400 ms` gây biên dịch lại shader, và nâng giới hạn Gadget Cache cho Metal 4 từ `64 MiB` lên `96 MiB`.
+          - **Hỗ trợ & Tự nhận diện JIT trên cả Metal 4 lẫn Universal:** Mặc định bật `Ưu tiên JIT` (an toàn tuyệt đối khi chưa gắn JIT nhờ kiểm tra `NO_DEBUGGER`, tự động kích hoạt tăng tốc & giảm nhiệt mạnh khi chạy cùng StikJIT / SideStore / Xcode) kèm hiển thị trạng thái **Động cơ CPU** trong bảng Thông số.
+          - **Bảng tiến trình khởi động thông minh hơn:** Giữ bảng theo dõi qua bước nháy dấu `_` (`fbcon`) cho tới khi SurfaceFlinger bắt đầu dựng hình thực tế.
+          - **Nền tảng ổn định từ `v1.2.0`:** Tự siết RAM/cache chống Jetsam trên thiết bị trần bộ nhớ hẹp (`<= 2.8 GiB`), Chế độ Mát máy thủ công, và Kho ROM đa phiên bản chính thức + Custom ROM.
 
           ## Hướng dẫn thiết lập nhanh (Mô hình VMware)
 

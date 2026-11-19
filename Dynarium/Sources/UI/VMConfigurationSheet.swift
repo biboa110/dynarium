@@ -159,12 +159,18 @@ struct VMConfigurationSheet: View {
                                 Text(backend.displayName).tag(backend)
                             }
                         }
-                        Toggle("Ưu tiên JIT (khi có Debugger/TrollStore)", isOn: $config.preferJitIfAvailable)
                     } else {
                         LabeledContent("Tăng tốc đồ họa") {
                             Text("KosmicKrisp + Zink (Metal 4)")
                                 .foregroundStyle(.secondary)
                         }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Ưu tiên JIT (StikJIT / SideStore / TrollStore)", isOn: $config.preferJitIfAvailable)
+                        Text("Tự động dùng trình biên dịch JIT nếu ứng dụng được gắn debugger/JIT giúp mượt hơn và mát máy hơn rõ rệt; tự quay về Gadget an toàn nếu không có JIT.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 

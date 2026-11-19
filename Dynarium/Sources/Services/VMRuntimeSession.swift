@@ -74,6 +74,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published var startSpaceShortage: StartSpace?
     @Published private(set) var afkEcoMode: Bool = false
     @Published private(set) var oledBlackoutActive: Bool = false
+    @Published private(set) var jitActiveInSession: Bool = false
     @Published private(set) var coolModeEnabled: Bool = false
     @Published private(set) var thermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
     @Published private(set) var thermalAutoThrottleActive: Bool = false
@@ -83,7 +84,11 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published var errorBannerMessage: String?
 
     var shouldShowBootOverlay: Bool {
-        phase.isActive && !telemetry.displayActive && bootStage != .ready && !bootOverlayDismissed
+        guard phase.isActive, bootStage != .ready, !bootOverlayDismissed else { return false }
+        if bootStage >= .startingGraphics && telemetry.displayActive && framesSinceGraphics >= 8 {
+            return false
+        }
+        return true
     }
 
     let installer = ApkInstaller()
@@ -113,6 +118,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private var prevStatsTimestampNs: UInt64 = 0
     private var prevProcessorTimeNs: UInt64 = 0
     private var prevPresentedFrames: UInt64 = 0
+    private var framesSinceGraphics: UInt64 = 0
     private var prevBootIndex: UInt32 = 0
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var isInBackground = false
@@ -150,9 +156,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         spacePause = nil
         afkEcoMode = false
         oledBlackoutActive = false
+        jitActiveInSession = false
         coolModeEnabled = vm.thermalSaverEnabled
         thermalState = ProcessInfo.processInfo.thermalState
-        thermalAutoThrottleActive = (thermalState == .serious || thermalState == .critical)
+        thermalAutoThrottleActive = (thermalState == .critical)
         lastAppliedThrottleState = nil
         lastAppliedPageTrimState = nil
         keyboardVisible = false
@@ -161,6 +168,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         prevStatsTimestampNs = 0
         prevProcessorTimeNs = 0
         prevPresentedFrames = 0
+        framesSinceGraphics = 0
         prevBootIndex = 0
         adbClock.setPaused(false)
         vmStore.markLaunched(id: vm.id)
@@ -228,6 +236,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                     self.bootStage = .preparing
                     self.bootStartedAt = Date()
                     self.bootOverlayDismissed = false
+                    self.framesSinceGraphics = 0
                     self.phase = .restarting(vmName: currentName, count: count)
                 case .booted:
                     if case .restarting = self.phase {
@@ -290,6 +299,11 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                         setenv("DRAW_USE_LLVM", "1", 1)
                     }
                 }
+            }
+
+            let jitEnabledNow = (useJitFlag != 0)
+            Task { @MainActor [weak self] in
+                self?.jitActiveInSession = jitEnabledNow
             }
 
             let exitCode = Self.executeGuestRuntime(
@@ -383,6 +397,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             self.thermalObserver = nil
         }
         thermalAutoThrottleActive = false
+        jitActiveInSession = false
+        framesSinceGraphics = 0
         lastAppliedThrottleState = nil
         lastAppliedPageTrimState = nil
         stopMonitoringLoops()
@@ -568,11 +584,11 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     }
 
     private func applyRuntimeResourcePolicies() {
-        let hot = (thermalState == .serious || thermalState == .critical)
-        thermalAutoThrottleActive = hot
+        let criticalThermal = (thermalState == .critical)
+        thermalAutoThrottleActive = criticalThermal
 
-        let shouldThrottle = afkEcoMode || coolModeEnabled || hot || (isInBackground && pipController.isActive)
-        let shouldTrimPages = shouldThrottle || hardware.isMemoryEntitlementLimited
+        let shouldThrottle = afkEcoMode || coolModeEnabled || criticalThermal || (isInBackground && pipController.isActive)
+        let shouldTrimPages = shouldThrottle || (hardware.edition == .universalSoftware && hardware.isMemoryEntitlementLimited)
 
         if lastAppliedThrottleState != shouldThrottle {
             lastAppliedThrottleState = shouldThrottle
@@ -662,10 +678,15 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             let share = (cpuDelta / (wallDelta * Double(stats.processor_count))) * 100.0
             next.cpuUtilizationPercent = min(max(share, 0), 100)
 
-            let frameDelta = stats.presented_frames >= prevPresentedFrames
-                ? Double(stats.presented_frames - prevPresentedFrames)
+            let frameCountDelta: UInt64 = stats.presented_frames >= prevPresentedFrames
+                ? (stats.presented_frames - prevPresentedFrames)
                 : 0
-            next.fps = frameDelta / (wallDelta / 1_000_000_000.0)
+            next.fps = Double(frameCountDelta) / (wallDelta / 1_000_000_000.0)
+            if bootStage >= .startingGraphics {
+                framesSinceGraphics += frameCountDelta
+            }
+        } else if stats.boot_index != prevBootIndex {
+            framesSinceGraphics = 0
         }
 
         prevStatsTimestampNs = stats.timestamp_ns
@@ -674,7 +695,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         prevBootIndex = stats.boot_index
         telemetry = next
 
-        if next.displayActive && bootStage < .startingGraphics {
+        if next.displayActive && bootStage >= .formattingOrInit && Date().timeIntervalSince(bootStartedAt) > 12 && bootStage < .startingGraphics {
             bootStage = .startingGraphics
         }
     }
@@ -766,7 +787,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         var detected: BootStage?
         if line.contains("processing action (sys.boot_completed=1)") || line.contains("starting service 'recovery'") {
             detected = .ready
-        } else if line.contains("starting service 'surfaceflinger'") || line.contains("Virgl ") {
+        } else if line.contains("starting service 'surfaceflinger'")
+                    || line.contains("SurfaceFlinger")
+                    || line.contains("hwcomposer")
+                    || line.contains("Virgl ") {
             detected = .startingGraphics
         } else if line.contains("init: init first stage started!") || line.contains("make_f2fs") || line.contains("Formatting ") || line.contains("EXT4-fs") {
             detected = .formattingOrInit
