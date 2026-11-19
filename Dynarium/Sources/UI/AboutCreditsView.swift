@@ -6,12 +6,28 @@ struct AboutCreditsView: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Dynarium")
-                        .font(.title2.bold())
-                    Text("Trình quản lý và ảo hóa đa máy ảo Android 17 (LineageOS 24) dành cho iOS & iPadOS (iOS 16.0 – iOS 27+), xây dựng theo triết lý VMware với hệ thống ROM tách rời và giao diện chuẩn Apple HIG.")
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 14) {
+                        Image("BrandMark")
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: 56, height: 56)
+                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Dynarium")
+                                .font(.title2.bold())
+                            Text("Android 17 trên iOS & iPadOS")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Text("Trình quản lý và ảo hóa đa máy ảo Android 17 (LineageOS 24) dành cho iOS 16.0 – iOS 27+, xây dựng theo mô hình VMware với kho ROM tách rời và giao diện chuẩn Apple HIG.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.vertical, 4)
             }

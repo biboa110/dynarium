@@ -1,0 +1,75 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="160" y1="80" x2="880" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E222B"/>
+      <stop offset="55%" stop-color="#14171E"/>
+      <stop offset="100%" stop-color="#0B0D12"/>
+    </linearGradient>
+    <radialGradient id="topGlow" cx="512" cy="210" r="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#334057" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#0B0D12" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="frameGrad" x1="276" y1="132" x2="748" y2="892" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E4E9F0"/>
+      <stop offset="28%" stop-color="#9CA6B5"/>
+      <stop offset="72%" stop-color="#5E6775"/>
+      <stop offset="100%" stop-color="#8B95A5"/>
+    </linearGradient>
+    <linearGradient id="vmCardGrad" x1="344" y1="356" x2="680" y2="696" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1C2430"/>
+      <stop offset="100%" stop-color="#121720"/>
+    </linearGradient>
+    <linearGradient id="androidGrad" x1="512" y1="436" x2="512" y2="606" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#48EB92"/>
+      <stop offset="100%" stop-color="#22B867"/>
+    </linearGradient>
+    <filter id="deviceShadow" x="230" y="108" width="564" height="844" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="androidShadow" x="370" y="410" width="284" height="236" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+
+  <!-- App squircle base -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bgGrad)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#topGlow)"/>
+  <rect x="2" y="2" width="1020" height="1020" rx="226" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="4"/>
+
+  <!-- Side hardware buttons (left volume, right power) -->
+  <rect x="266" y="294" width="12" height="58" rx="5" fill="#7D8796"/>
+  <rect x="266" y="372" width="12" height="58" rx="5" fill="#7D8796"/>
+  <rect x="746" y="338" width="12" height="90" rx="5" fill="#8C96A5"/>
+
+  <!-- iOS device bezel & screen -->
+  <g filter="url(#deviceShadow)">
+    <rect x="276" y="132" width="472" height="760" rx="98" fill="url(#frameGrad)"/>
+    <rect x="282" y="138" width="460" height="748" rx="92" fill="#171B22"/>
+    <rect x="298" y="154" width="428" height="716" rx="76" fill="#0B0E14"/>
+  </g>
+
+  <!-- Dynamic Island -->
+  <rect x="448" y="186" width="128" height="34" rx="17" fill="#1A202B"/>
+  <circle cx="554" cy="203" r="8" fill="#0D121A"/>
+  <circle cx="554" cy="203" r="4" fill="#1D4068"/>
+
+  <!-- Stacked VM layer peeking behind the active VM container -->
+  <rect x="378" y="324" width="268" height="80" rx="34" fill="#18202C" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="2"/>
+
+  <!-- Active Android VM container inside iOS display -->
+  <rect x="342" y="352" width="340" height="348" rx="54" fill="url(#vmCardGrad)" stroke="#303C4E" stroke-width="2.5"/>
+  <rect x="344" y="354" width="336" height="344" rx="52" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2"/>
+
+  <!-- Android head emblem -->
+  <g filter="url(#androidShadow)">
+    <line x1="458" y1="504" x2="424" y2="444" stroke="url(#androidGrad)" stroke-width="18" stroke-linecap="round"/>
+    <line x1="566" y1="504" x2="600" y2="444" stroke="url(#androidGrad)" stroke-width="18" stroke-linecap="round"/>
+    <path d="M 396 602 A 116 116 0 0 1 628 602 Z" fill="url(#androidGrad)"/>
+    <circle cx="464" cy="548" r="12.5" fill="#131922"/>
+    <circle cx="560" cy="548" r="12.5" fill="#131922"/>
+  </g>
+
+  <!-- Subtle iOS Home Indicator -->
+  <rect x="434" y="832" width="156" height="10" rx="5" fill="#5D6676"/>
+</svg>
