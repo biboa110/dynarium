@@ -128,14 +128,6 @@ void resume_guest(GuestSuspension suspension) noexcept;
  */
 bool wake_guest() noexcept;
 
-/*
- * Asks the guest kernel to execute a clean machine_halt() through the
- * management console ("halt"). The kernel runs its clean shutdown path
- * (returning UML_EMULATOR_RUN_END_POWER_OFF to the host so guest RAM can be
- * handed back safely).
- */
-[[nodiscard]] GuestRequest halt_guest() noexcept;
-
 /* How a request to the guest's console ended. */
 enum class GuestRequest {
 	/* No console was reachable, so nothing was sent. */
@@ -147,6 +139,14 @@ enum class GuestRequest {
 	/* The guest did it. */
 	done,
 };
+
+/*
+ * Asks the guest kernel to execute a clean machine_halt() through the
+ * management console ("halt"). The kernel runs its clean shutdown path
+ * (returning UML_EMULATOR_RUN_END_POWER_OFF to the host so guest RAM can be
+ * handed back safely).
+ */
+[[nodiscard]] GuestRequest halt_guest() noexcept;
 
 /*
  * Turns the guest's periodic page-cache trimming on or off ("trim on",
