@@ -3,6 +3,7 @@
 import Foundation
 import GuestHostCore
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct SystemImagesView: View {
@@ -11,6 +12,7 @@ struct SystemImagesView: View {
 
     @State private var presentingFileImporter = false
     @State private var presentingCustomURL = false
+    @State private var presentingCustomGuide = false
     @State private var imagePendingDeletion: SystemImageManifest?
 
     private var importContentTypes: [UTType] {
@@ -32,9 +34,17 @@ struct SystemImagesView: View {
                 }
 
                 Section {
-                    ForEach(OfficialCatalogImage.catalog) { item in
+                    if let refreshError = imageStore.catalogRefreshError {
+                        Label(refreshError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    ForEach(imageStore.catalogImages) { item in
                         let alreadyInstalled = imageStore.images.contains {
                             $0.sourceDescription.contains(item.id)
+                                || (!item.shortRevision.isEmpty && $0.name.contains(item.shortRevision))
+                                || (!item.releaseTag.isEmpty && $0.sourceDescription.contains(item.releaseTag))
                         }
                         CatalogRowView(
                             item: item,
@@ -45,9 +55,53 @@ struct SystemImagesView: View {
                         }
                     }
                 } header: {
-                    Text("Kho ROM chính thức")
+                    HStack {
+                        Text("Kho ROM chính thức")
+                        Spacer()
+                        if imageStore.isRefreshingCatalog {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                    }
                 } footer: {
-                    Text("Bản ROM Android 17 (LineageOS 24) tải trực tiếp từ kho phát hành và giải nén dạng thưa (APFS Sparse) để tiết kiệm dung lượng.")
+                    if let last = imageStore.catalogLastRefreshed {
+                        Text("Đã đồng bộ nguồn phát hành chính thức lúc \(last.formatted(date: .omitted, time: .shortened)). Các bản ROM đều giải nén thưa (APFS Sparse) để tiết kiệm dung lượng.")
+                    } else {
+                        Text("Các bản ROM chính thức từ GitHub Releases (Kernarium / Dynarium) hỗ trợ giải nén dạng thưa (APFS Sparse) để tiết kiệm dung lượng. Kéo xuống để cập nhật danh sách phiên bản mới.")
+                    }
+                }
+
+                Section {
+                    Text("Bạn có thể tự tải tệp ROM (.tar.gz / .tar.zst) từ website phát hành chính thức hoặc nạp bản ROM tự tùy biến rồi nhập trực tiếp vào máy.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+
+                    CenteredActionButton(
+                        title: "Nhập tệp ROM từ Tệp (Files)",
+                        systemImage: "folder.badge.plus",
+                        tone: .tinted,
+                        disabled: imageStore.isBusy()
+                    ) {
+                        presentingFileImporter = true
+                    }
+
+                    CenteredActionButton(
+                        title: "Tải từ liên kết URL tùy chỉnh",
+                        systemImage: "link.badge.plus",
+                        tone: .tinted,
+                        disabled: imageStore.isBusy()
+                    ) {
+                        presentingCustomURL = true
+                    }
+
+                    Button {
+                        presentingCustomGuide = true
+                    } label: {
+                        Label("Nguồn chính thức & Hướng dẫn Custom ROM", systemImage: "doc.text.magnifyingglass")
+                    }
+                } header: {
+                    Text("Nhập ROM thủ công & Tự Custom")
                 }
 
                 Section {
@@ -78,8 +132,25 @@ struct SystemImagesView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Kho ROM")
+            .refreshable {
+                await imageStore.refreshOfficialCatalog()
+            }
+            .task {
+                await imageStore.refreshOfficialCatalogIfNeeded()
+            }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task { await imageStore.refreshOfficialCatalog() }
+                    } label: {
+                        if imageStore.isRefreshingCatalog {
+                            ProgressView()
+                        } else {
+                            Label("Làm mới nguồn ROM", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(imageStore.isRefreshingCatalog)
+
                     Menu {
                         Button {
                             presentingFileImporter = true
@@ -90,6 +161,12 @@ struct SystemImagesView: View {
                             presentingCustomURL = true
                         } label: {
                             Label("Tải từ liên kết URL", systemImage: "link")
+                        }
+                        Divider()
+                        Button {
+                            presentingCustomGuide = true
+                        } label: {
+                            Label("Nguồn chính thức & Custom ROM", systemImage: "doc.text.magnifyingglass")
                         }
                     } label: {
                         Label("Thêm ROM", systemImage: "plus")
@@ -108,6 +185,9 @@ struct SystemImagesView: View {
             }
             .sheet(isPresented: $presentingCustomURL) {
                 AddSystemImageSheet()
+            }
+            .sheet(isPresented: $presentingCustomGuide) {
+                CustomRomGuideSheet()
             }
             .alert(
                 "Lỗi cài đặt ROM",
@@ -222,6 +302,17 @@ private struct CatalogRowView: View {
     let disabled: Bool
     let onDownload: () -> Void
 
+    private var badgeTint: Color {
+        switch item.badgeText {
+        case "Mới nhất":
+            return .accentColor
+        case "Trực tuyến":
+            return .teal
+        default:
+            return .indigo
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
@@ -234,8 +325,8 @@ private struct CatalogRowView: View {
                         .foregroundStyle(Color.accentColor)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(item.title)
                             .font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
@@ -251,12 +342,33 @@ private struct CatalogRowView: View {
                             .padding(.vertical, 3)
                             .background(Color.green.opacity(0.14), in: Capsule())
                             .fixedSize()
+                        } else if let badge = item.badgeText {
+                            Text(badge)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(badgeTint)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(badgeTint.opacity(0.14), in: Capsule())
+                                .fixedSize()
                         }
                     }
+
                     Text(item.subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 6) {
+                        Text("\(item.sourceName) • \(item.releaseTag)")
+                        if let published = item.publishedLabel {
+                            Text("•")
+                            Text(published)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 }
             }
 
@@ -271,13 +383,29 @@ private struct CatalogRowView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            CenteredActionButton(
-                title: alreadyInstalled ? "Tải thêm bản sao" : "Tải về ngay (1 chạm)",
-                systemImage: "square.and.arrow.down",
-                tone: alreadyInstalled ? .tinted : .prominent,
-                disabled: disabled,
-                action: onDownload
-            )
+            VStack(spacing: 8) {
+                CenteredActionButton(
+                    title: alreadyInstalled ? "Tải thêm bản sao" : "Tải trực tiếp trong app",
+                    systemImage: "square.and.arrow.down",
+                    tone: alreadyInstalled ? .tinted : .prominent,
+                    disabled: disabled,
+                    action: onDownload
+                )
+
+                Link(destination: item.sourcePageURL) {
+                    Label("Mở trang phát hành chính thức", systemImage: "safari")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(
+                            Color(.secondarySystemFill),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+            }
             .padding(.top, 2)
         }
         .padding(.vertical, 4)
@@ -319,5 +447,77 @@ private struct InstalledImageRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct CustomRomGuideSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(OfficialWebsiteSource.all) { source in
+                        Link(destination: source.url) {
+                            HStack(spacing: 12) {
+                                Image(systemName: source.iconName)
+                                    .font(.title3)
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(source.name)
+                                        .font(.headline)
+                                        .foregroundStyle(.primary)
+                                    Text(source.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                } header: {
+                    Text("Website phát hành chính thức & an toàn")
+                } footer: {
+                    Text("Chỉ nên tải tệp ROM từ kho phát hành chính thức trên GitHub Releases hoặc tự biên dịch từ mã nguồn LineageOS để đảm bảo toàn vẹn SHA-256.")
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Lưu trữ dưới dạng .tar.gz, .tgz hoặc .tar.zst với các tệp bên trong:")
+                            .font(.subheadline)
+                        Text("• guest/system.img (hoặc guest/super.img)\n• guest/partition-layout.json\n• boot/kernel-command-line.txt")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Yêu cầu kỹ thuật 4 KiB Guest Page")
+                            .font(.subheadline.weight(.medium))
+                        Text("Android Runtime và linker 64/32-bit cần phân vùng gốc định dạng 4 KiB để tương thích hoàn toàn với User-Mode Linux Mainline 6.18.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Cấu trúc gói ROM tự custom")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Nguồn & Custom ROM")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Xong") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }

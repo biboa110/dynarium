@@ -45,8 +45,79 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
     var softwareBackend: PreferredSoftwareBackend
     var afkFrameRateLimit: Int
     var afkBlackoutEnabled: Bool
+    var thermalSaverEnabled: Bool
     var createdAt: Date
     var lastRunAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, systemImageID, guestMemoryMiB, vcpuCount, dataDiskGiB
+        case retinaDisplay, autoResizeDisplay, bootMode, microphoneEnabled
+        case adbOverLan, preferJitIfAvailable, softwareBackend
+        case afkFrameRateLimit, afkBlackoutEnabled, thermalSaverEnabled
+        case createdAt, lastRunAt
+    }
+
+    init(
+        id: UUID,
+        name: String,
+        systemImageID: UUID,
+        guestMemoryMiB: Int,
+        vcpuCount: Int,
+        dataDiskGiB: Int,
+        retinaDisplay: Bool,
+        autoResizeDisplay: Bool,
+        bootMode: VMBootMode,
+        microphoneEnabled: Bool,
+        adbOverLan: Bool,
+        preferJitIfAvailable: Bool,
+        softwareBackend: PreferredSoftwareBackend,
+        afkFrameRateLimit: Int,
+        afkBlackoutEnabled: Bool,
+        thermalSaverEnabled: Bool = false,
+        createdAt: Date,
+        lastRunAt: Date?
+    ) {
+        self.id = id
+        self.name = name
+        self.systemImageID = systemImageID
+        self.guestMemoryMiB = guestMemoryMiB
+        self.vcpuCount = vcpuCount
+        self.dataDiskGiB = dataDiskGiB
+        self.retinaDisplay = retinaDisplay
+        self.autoResizeDisplay = autoResizeDisplay
+        self.bootMode = bootMode
+        self.microphoneEnabled = microphoneEnabled
+        self.adbOverLan = adbOverLan
+        self.preferJitIfAvailable = preferJitIfAvailable
+        self.softwareBackend = softwareBackend
+        self.afkFrameRateLimit = afkFrameRateLimit
+        self.afkBlackoutEnabled = afkBlackoutEnabled
+        self.thermalSaverEnabled = thermalSaverEnabled
+        self.createdAt = createdAt
+        self.lastRunAt = lastRunAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        systemImageID = try c.decode(UUID.self, forKey: .systemImageID)
+        guestMemoryMiB = try c.decode(Int.self, forKey: .guestMemoryMiB)
+        vcpuCount = try c.decode(Int.self, forKey: .vcpuCount)
+        dataDiskGiB = try c.decode(Int.self, forKey: .dataDiskGiB)
+        retinaDisplay = try c.decode(Bool.self, forKey: .retinaDisplay)
+        autoResizeDisplay = try c.decode(Bool.self, forKey: .autoResizeDisplay)
+        bootMode = try c.decode(VMBootMode.self, forKey: .bootMode)
+        microphoneEnabled = try c.decode(Bool.self, forKey: .microphoneEnabled)
+        adbOverLan = try c.decode(Bool.self, forKey: .adbOverLan)
+        preferJitIfAvailable = try c.decode(Bool.self, forKey: .preferJitIfAvailable)
+        softwareBackend = try c.decode(PreferredSoftwareBackend.self, forKey: .softwareBackend)
+        afkFrameRateLimit = try c.decode(Int.self, forKey: .afkFrameRateLimit)
+        afkBlackoutEnabled = try c.decode(Bool.self, forKey: .afkBlackoutEnabled)
+        thermalSaverEnabled = try c.decodeIfPresent(Bool.self, forKey: .thermalSaverEnabled) ?? false
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        lastRunAt = try c.decodeIfPresent(Date.self, forKey: .lastRunAt)
+    }
 }
 
 nonisolated enum VMStoreError: LocalizedError, Sendable {
@@ -65,6 +136,8 @@ nonisolated struct VMSessionDiagnostic: Equatable, Sendable {
     let message: String
     let suggestsSafeTune: Bool
     let isCrashOrJetsam: Bool
+    let peakBreakdown: String?
+    let rawTail: String?
 }
 
 @MainActor
@@ -155,6 +228,7 @@ final class VirtualMachineStore: ObservableObject {
             softwareBackend: .auto,
             afkFrameRateLimit: 10,
             afkBlackoutEnabled: true,
+            thermalSaverEnabled: false,
             createdAt: Date(),
             lastRunAt: nil
         )
@@ -234,6 +308,7 @@ final class VirtualMachineStore: ObservableObject {
             softwareBackend: source.softwareBackend,
             afkFrameRateLimit: source.afkFrameRateLimit,
             afkBlackoutEnabled: source.afkBlackoutEnabled,
+            thermalSaverEnabled: source.thermalSaverEnabled,
             createdAt: Date(),
             lastRunAt: nil
         )
@@ -264,7 +339,12 @@ final class VirtualMachineStore: ObservableObject {
         }
 
         let raw = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\0", with: "")
-        let headerSection = raw.components(separatedBy: "\nkernel-output\n").first ?? raw
+        let sections = raw.components(separatedBy: "\nkernel-output\n")
+        let headerSection = sections.first ?? raw
+        let rawTail: String? = sections.count > 1
+            ? sections[1].split(separator: "\n", omittingEmptySubsequences: false).suffix(24).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            : nil
+
         let lines = headerSection
             .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -275,7 +355,7 @@ final class VirtualMachineStore: ObservableObject {
             if let space = line.firstIndex(of: " ") {
                 let key = String(line[..<space])
                 let value = String(line[line.index(after: space)...]).trimmingCharacters(in: .whitespaces)
-                if key == "memory" || key == "state" || key == "end" || key == "status" || key == "message" {
+                if ["memory", "state", "end", "status", "message", "terms", "peak-terms"].contains(key) {
                     fields[key] = value
                 }
             } else if line == "running" || line == "powered_off" || line == "powered-off" {
@@ -300,6 +380,7 @@ final class VirtualMachineStore: ObservableObject {
             availableBytes = values["available"]
         }
 
+        let peakBreakdown = Self.formatTermsBreakdown(fields["peak-terms"] ?? fields["terms"])
         let state = fields["state"] ?? ""
         let end = fields["end"] ?? state
         let message = fields["message"]
@@ -317,14 +398,18 @@ final class VirtualMachineStore: ObservableObject {
                     title: "iOS đã đóng máy ảo (chạm trần RAM)",
                     message: "Phiên trước bị iOS thu hồi bộ nhớ\(peakText), chỉ còn \(Formats.size(bytes: avail)) trước trần. Hãy bấm Tối ưu an toàn.",
                     suggestsSafeTune: true,
-                    isCrashOrJetsam: true
+                    isCrashOrJetsam: true,
+                    peakBreakdown: peakBreakdown,
+                    rawTail: rawTail
                 )
             }
             return VMSessionDiagnostic(
                 title: "Phiên trước bị đóng đột ngột",
                 message: "Máy ảo dừng bất thường khi đang khởi chạy\(peakText). Hãy dùng Tối ưu an toàn để giữ RAM và CPU ổn định.",
                 suggestsSafeTune: true,
-                isCrashOrJetsam: true
+                isCrashOrJetsam: true,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         }
 
@@ -334,14 +419,18 @@ final class VirtualMachineStore: ObservableObject {
                 title: "Nhân Linux Android gặp lỗi",
                 message: "Hệ điều hành khách dừng với kernel panic\(detail).",
                 suggestsSafeTune: false,
-                isCrashOrJetsam: true
+                isCrashOrJetsam: true,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         case "kernel-abort":
             return VMSessionDiagnostic(
                 title: "Nhân Linux dừng bất thường",
                 message: "Nhân máy ảo gặp sự cố trong lúc chạy\(detail).",
                 suggestsSafeTune: true,
-                isCrashOrJetsam: true
+                isCrashOrJetsam: true,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         case "kernel-exit":
             let codeText = status.map { " (mã \($0))" } ?? ""
@@ -349,21 +438,27 @@ final class VirtualMachineStore: ObservableObject {
                 title: "Android dừng ngoài ý muốn",
                 message: "Nhân hệ điều hành khách đã thoát\(codeText)\(detail).",
                 suggestsSafeTune: false,
-                isCrashOrJetsam: true
+                isCrashOrJetsam: true,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         case "hibernation-restore-failed":
             return VMSessionDiagnostic(
                 title: "Cần khởi động lại từ đầu",
                 message: "Không thể khôi phục bộ nhớ ngủ đông của phiên trước; lần bật tới sẽ khởi động mới.",
                 suggestsSafeTune: false,
-                isCrashOrJetsam: false
+                isCrashOrJetsam: false,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         case "host-fault", "process-exit":
             return VMSessionDiagnostic(
                 title: "Ứng dụng dừng khi máy ảo đang chạy",
                 message: "Tiến trình Dynarium gặp sự cố đột ngột\(detail). Khuyên dùng Tối ưu an toàn trước khi chạy lại.",
                 suggestsSafeTune: true,
-                isCrashOrJetsam: true
+                isCrashOrJetsam: true,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         case "":
             return nil
@@ -372,9 +467,34 @@ final class VirtualMachineStore: ObservableObject {
                 title: "Phiên trước kết thúc bất thường",
                 message: "Máy ảo chưa tắt hoàn chỉnh\(detail). Nên kiểm tra lại cấu hình trước khi khởi chạy.",
                 suggestsSafeTune: true,
-                isCrashOrJetsam: false
+                isCrashOrJetsam: false,
+                peakBreakdown: peakBreakdown,
+                rawTail: rawTail
             )
         }
+    }
+
+    private nonisolated static func formatTermsBreakdown(_ line: String?) -> String? {
+        guard let line, !line.isEmpty else { return nil }
+        let tokens = line.split(separator: " ")
+        var segments: [String] = []
+        let labels: [(String, String)] = [
+            ("guest", "Guest"),
+            ("graphics", "Đồ họa"),
+            ("cache", "Cache"),
+            ("malloc", "Malloc"),
+            ("other", "Khác"),
+        ]
+        for (key, display) in labels {
+            if let idx = tokens.firstIndex(of: Substring(key)), idx + 1 < tokens.count {
+                let rawVal = String(tokens[idx + 1])
+                let primary = rawVal.split(separator: "/").first.map(String.init) ?? rawVal
+                if primary != "0" {
+                    segments.append("\(display) \(primary) MiB")
+                }
+            }
+        }
+        return segments.isEmpty ? nil : segments.joined(separator: " • ")
     }
 
     func lastSessionSummary(for id: UUID) -> String? {

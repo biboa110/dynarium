@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+import Foundation
 import GuestHostCore
 import SwiftUI
 import UIKit
@@ -94,6 +95,25 @@ struct VMSessionView: View {
                 )
             }
 
+            if session.thermalAutoThrottleActive && !session.oledBlackoutActive && session.spacePause == nil && installer.state == .idle {
+                VStack {
+                    HStack(spacing: 6) {
+                        Image(systemName: "thermometer.sun.fill")
+                            .font(.caption.weight(.semibold))
+                        Text("Đang tự hạ nhiệt CPU")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.orange.opacity(0.35), lineWidth: 0.5))
+                    .padding(.top, 8)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
+
             if installer.state != .idle {
                 VStack {
                     ApkInstallBanner(state: installer.state) {
@@ -135,7 +155,10 @@ struct VMSessionView: View {
                 vm: session.activeVM,
                 hardware: hardware,
                 telemetry: session.telemetry,
-                adbLanAddress: session.adbLanAddress
+                adbLanAddress: session.adbLanAddress,
+                thermalState: session.thermalState,
+                coolModeEnabled: session.coolModeEnabled,
+                thermalAutoThrottleActive: session.thermalAutoThrottleActive
             )
         }
         .fileImporter(
@@ -531,8 +554,26 @@ private struct SessionStatsSheet: View {
     let hardware: HostHardwareProfile
     let telemetry: VMTelemetrySnapshot
     let adbLanAddress: String?
+    let thermalState: ProcessInfo.ThermalState
+    let coolModeEnabled: Bool
+    let thermalAutoThrottleActive: Bool
 
     @Environment(\.dismiss) private var dismiss
+
+    private var thermalDescription: (label: String, color: Color) {
+        switch thermalState {
+        case .nominal:
+            return ("Bình thường", .green)
+        case .fair:
+            return ("Hơi ấm", .secondary)
+        case .serious:
+            return ("Nóng — đang tự hạ nhiệt", .orange)
+        case .critical:
+            return ("Quá nhiệt — siết CPU/FPS", .red)
+        @unknown default:
+            return ("Không xác định", .secondary)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -580,6 +621,14 @@ private struct SessionStatsSheet: View {
                                     : hardware.resolvedGalliumDriver(preference: vm.softwareBackend, jitActive: hardware.debuggerAttached)
                             )
                         }
+                    }
+                    LabeledContent("Trạng thái nhiệt iOS") {
+                        Text(thermalDescription.label)
+                            .foregroundStyle(thermalDescription.color)
+                    }
+                    LabeledContent("Chế độ Mát máy") {
+                        Text(coolModeEnabled ? "Đang bật" : (thermalAutoThrottleActive ? "Tự kích hoạt" : "Tắt"))
+                            .foregroundStyle((coolModeEnabled || thermalAutoThrottleActive) ? Color.accentColor : Color.secondary)
                     }
                     LabeledContent("ADB qua Wi-Fi") {
                         Text(adbLanAddress ?? "Đang tắt")

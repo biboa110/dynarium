@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+import Foundation
 import SwiftUI
 
 enum ActionButtonTone {
@@ -68,13 +69,26 @@ struct Metal4RecommendationBanner: View {
                     .foregroundStyle(Color.accentColor)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Khuyên dùng bản Metal 4 cho iOS \(osVersion)")
                     .font(.subheadline.weight(.semibold))
                 Text("\(chipLabel) hỗ trợ tăng tốc GPU Vulkan 1.4 qua gói Metal4-iOS26.ipa (mượt và nhẹ RAM hơn). Bản Universal hiện tại vẫn chạy an toàn bằng CPU.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Link(destination: URL(string: "https://github.com/userlethekhoi/dynarium/releases/latest")!) {
+                    Label("Mở trang tải Metal4-iOS26.ipa", systemImage: "arrow.down.circle")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            Color.accentColor.opacity(0.14),
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.borderless)
+                .padding(.top, 2)
             }
 
             Spacer(minLength: 4)

@@ -11,6 +11,12 @@ private struct PendingSafetyLaunch: Equatable {
     let safety: LaunchSafetyAssessment
 }
 
+private struct DiagnosticSheetItem: Identifiable {
+    let id = UUID()
+    let vmName: String
+    let diagnostic: VMSessionDiagnostic
+}
+
 struct MachinesListView: View {
     let switchToImagesTab: () -> Void
 
@@ -27,6 +33,7 @@ struct MachinesListView: View {
     @State private var confirmingDeleteVM: VirtualMachineConfig?
     @State private var cloneErrorMessage: String?
     @State private var pendingSafetyLaunch: PendingSafetyLaunch?
+    @State private var inspectingDiagnostic: DiagnosticSheetItem?
 
     var body: some View {
         NavigationStack {
@@ -74,6 +81,9 @@ struct MachinesListView: View {
             }
             .sheet(item: $editingVM) { vm in
                 VMConfigurationSheet(mode: .edit, initialConfig: vm)
+            }
+            .sheet(item: $inspectingDiagnostic) { item in
+                SessionDiagnosticSheet(vmName: item.vmName, diagnostic: item.diagnostic)
             }
     }
 
@@ -146,12 +156,13 @@ struct MachinesListView: View {
     @ViewBuilder
     private func vmRow(for vm: VirtualMachineConfig) -> some View {
         let linkedImage = imageStore.images.first { $0.id == vm.systemImageID }
+        let diagnostic = vmStore.lastSessionDiagnostic(for: vm.id)
         VMRowView(
             vm: vm,
             image: linkedImage,
             diskAllocatedBytes: vmStore.dataDiskAllocatedBytes(for: vm.id),
             diskCreated: vmStore.dataDiskExists(for: vm.id),
-            diagnostic: vmStore.lastSessionDiagnostic(for: vm.id),
+            diagnostic: diagnostic,
             isCloning: cloningVMID == vm.id,
             canLaunch: !session.phase.isActive,
             onLaunch: { launch(vm) },
@@ -159,6 +170,11 @@ struct MachinesListView: View {
             onClone: { clone(vm) },
             onApplySafeTune: {
                 _ = vmStore.applySafeProfile(for: vm.id, hardware: hardware)
+            },
+            onInspectDiagnostic: {
+                if let diagnostic {
+                    inspectingDiagnostic = DiagnosticSheetItem(vmName: vm.name, diagnostic: diagnostic)
+                }
             },
             onDismissDiagnostic: {
                 vmStore.clearSessionRecord(for: vm.id)
@@ -335,6 +351,7 @@ private struct VMRowView: View {
     let onEdit: () -> Void
     let onClone: () -> Void
     let onApplySafeTune: () -> Void
+    let onInspectDiagnostic: () -> Void
     let onDismissDiagnostic: () -> Void
     let onWipeData: () -> Void
     let onDelete: () -> Void
@@ -480,19 +497,46 @@ private struct VMRowView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if diagnostic.suggestsSafeTune {
-                        Button(action: onApplySafeTune) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "wrench.and.screwdriver.fill")
-                                    .font(.caption.weight(.semibold))
-                                Text("Tối ưu cấu hình an toàn")
-                                    .font(.caption.weight(.semibold))
+                    if let breakdown = diagnostic.peakBreakdown {
+                        Text("Đỉnh RAM: \(breakdown)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if diagnostic.suggestsSafeTune || diagnostic.peakBreakdown != nil || diagnostic.rawTail != nil {
+                        HStack(spacing: 8) {
+                            if diagnostic.suggestsSafeTune {
+                                Button(action: onApplySafeTune) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "wrench.and.screwdriver.fill")
+                                            .font(.caption.weight(.semibold))
+                                        Text("Tối ưu an toàn")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .center)
+                                    .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                }
+                                .buttonStyle(.borderless)
                             }
-                            .foregroundStyle(Color.accentColor)
-                            .frame(maxWidth: .infinity, minHeight: 32, alignment: .center)
-                            .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                            if diagnostic.peakBreakdown != nil || diagnostic.rawTail != nil {
+                                Button(action: onInspectDiagnostic) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "doc.text.magnifyingglass")
+                                            .font(.caption.weight(.semibold))
+                                        Text("Xem chi tiết")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: diagnostic.suggestsSafeTune ? nil : .infinity, minHeight: 32, alignment: .center)
+                                    .padding(.horizontal, 10)
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                }
+                                .buttonStyle(.borderless)
+                            }
                         }
-                        .buttonStyle(.plain)
                         .padding(.top, 2)
                     }
                 }
@@ -613,6 +657,90 @@ private struct MachineAlertsModifier: ViewModifier {
             Button("Đóng", role: .cancel) { cloneErrorMessage = nil }
         } message: {
             Text(cloneErrorMessage ?? "")
+        }
+    }
+}
+
+private struct SessionDiagnosticSheet: View {
+    let vmName: String
+    let diagnostic: VMSessionDiagnostic
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    private var exportText: String {
+        var parts = [
+            "Máy ảo: \(vmName)",
+            "Sự cố: \(diagnostic.title)",
+            "Tóm tắt: \(diagnostic.message)"
+        ]
+        if let breakdown = diagnostic.peakBreakdown {
+            parts.append("Đỉnh RAM: \(breakdown)")
+        }
+        if let rawTail = diagnostic.rawTail, !rawTail.isEmpty {
+            parts.append("\n--- kernel-output ---\n\(rawTail)")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Chẩn đoán phiên gần nhất") {
+                    LabeledContent("Máy ảo", value: vmName)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(diagnostic.title)
+                            .font(.headline)
+                        Text(diagnostic.message)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+
+                    if let breakdown = diagnostic.peakBreakdown {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Phân bổ đỉnh RAM")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(breakdown)
+                                .font(.caption.monospacedDigit())
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                if let rawTail = diagnostic.rawTail, !rawTail.isEmpty {
+                    Section("Nhật ký Kernel cuối phiên") {
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            Text(rawTail)
+                                .font(.caption2.monospaced())
+                                .textSelection(.enabled)
+                                .padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Chi tiết phiên chạy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        UIPasteboard.general.string = exportText
+                        copied = true
+                    } label: {
+                        Label(
+                            copied ? "Đã chép" : "Sao chép",
+                            systemImage: copied ? "checkmark" : "doc.on.doc"
+                        )
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Xong") {
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }

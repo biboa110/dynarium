@@ -14,20 +14,106 @@ nonisolated struct OfficialCatalogImage: Identifiable, Hashable, Sendable {
     let approximateDownloadBytes: UInt64
     let downloadURL: URL
     let defaultDataGiB: Int
+    let releaseTag: String
+    let sourceName: String
+    let sourcePageURL: URL
+    let badgeText: String?
+    let publishedLabel: String?
 
-    static let catalog: [OfficialCatalogImage] = [
+    var shortRevision: String {
+        if let range = id.range(of: "los24-") {
+            return String(id[range.lowerBound...])
+        }
+        return releaseTag
+    }
+
+    static let builtinCatalog: [OfficialCatalogImage] = [
+        OfficialCatalogImage(
+            id: "lineage24-mainline6.18-4k-20261115-los24-r28",
+            title: "LineageOS 24 (Android 17)",
+            subtitle: "Bản phát hành r28 cập nhật (Mesa / Vulkan + ARM64 & 32-bit)",
+            androidMajor: "17",
+            kernelVersion: "Linux 6.18 LTS",
+            pageProfile: "4 KiB Guest",
+            approximateDownloadBytes: 1_042_700_000,
+            downloadURL: URL(string: "https://github.com/imxieyi/Kernarium/releases/download/1.0b15-release/lineage24-mainline6.18-4k-20261115-los24-r28.tar.gz")!,
+            defaultDataGiB: 16,
+            releaseTag: "1.0b15-release",
+            sourceName: "Kernarium Releases",
+            sourcePageURL: URL(string: "https://github.com/imxieyi/Kernarium/releases/tag/1.0b15-release")!,
+            badgeText: "Mới nhất",
+            publishedLabel: "2026-11-15"
+        ),
         OfficialCatalogImage(
             id: "lineage24-mainline6.18-4k-20261110-los24-r22",
             title: "LineageOS 24 (Android 17)",
-            subtitle: "Bản chuẩn chính thức hỗ trợ Vulkan / Mesa + ARM64 & 32-bit",
+            subtitle: "Bản chuẩn r22 ổn định (Vulkan / Mesa + ARM64 & 32-bit)",
             androidMajor: "17",
             kernelVersion: "Linux 6.18 LTS",
             pageProfile: "4 KiB Guest",
             approximateDownloadBytes: 1_034_840_000,
             downloadURL: URL(string: "https://github.com/imxieyi/Kernarium/releases/download/1.0b9-beta/lineage24-mainline6.18-4k-20261110-los24-r22.tar.gz")!,
-            defaultDataGiB: 16
+            defaultDataGiB: 16,
+            releaseTag: "1.0b9-beta",
+            sourceName: "Kernarium Releases",
+            sourcePageURL: URL(string: "https://github.com/imxieyi/Kernarium/releases/tag/1.0b9-beta")!,
+            badgeText: "Ổn định",
+            publishedLabel: "2026-11-10"
         )
     ]
+
+    static var catalog: [OfficialCatalogImage] { builtinCatalog }
+}
+
+nonisolated struct OfficialWebsiteSource: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let subtitle: String
+    let url: URL
+    let iconName: String
+
+    static let all: [OfficialWebsiteSource] = [
+        OfficialWebsiteSource(
+            id: "kernarium-releases",
+            name: "GitHub Releases — Kernarium",
+            subtitle: "Kho ROM chính thức Android 17 / LineageOS 24 (.tar.gz, 4 KiB Page)",
+            url: URL(string: "https://github.com/imxieyi/Kernarium/releases")!,
+            iconName: "shippingbox"
+        ),
+        OfficialWebsiteSource(
+            id: "dynarium-releases",
+            name: "GitHub Releases — Dynarium",
+            subtitle: "Trang phát hành chính thức các bản IPA (Universal & Metal 4)",
+            url: URL(string: "https://github.com/userlethekhoi/dynarium/releases")!,
+            iconName: "arrow.down.app"
+        ),
+        OfficialWebsiteSource(
+            id: "lineageos-official",
+            name: "LineageOS Official",
+            subtitle: "Trang chủ dự án mã nguồn mở LineageOS",
+            url: URL(string: "https://lineageos.org")!,
+            iconName: "globe"
+        )
+    ]
+}
+
+private nonisolated struct GitHubReleaseDTO: Decodable, Sendable {
+    struct Asset: Decodable, Sendable {
+        let name: String
+        let size: UInt64
+        let browser_download_url: String
+    }
+
+    let tag_name: String
+    let html_url: String
+    let published_at: String?
+    let draft: Bool
+    let assets: [Asset]
+
+    var publishedDateLabel: String? {
+        guard let published_at, published_at.count >= 10 else { return nil }
+        return String(published_at.prefix(10))
+    }
 }
 
 nonisolated struct SystemImageManifest: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -116,6 +202,10 @@ final class SystemImageStore: NSObject, ObservableObject {
     @Published private(set) var images: [SystemImageManifest] = []
     @Published private(set) var activeInstall: ImageInstallState?
     @Published var lastErrorMessage: String?
+    @Published private(set) var catalogImages: [OfficialCatalogImage] = OfficialCatalogImage.builtinCatalog
+    @Published private(set) var isRefreshingCatalog = false
+    @Published private(set) var catalogLastRefreshed: Date?
+    @Published private(set) var catalogRefreshError: String?
 
     private let rootURL: URL
     private let indexURL: URL
@@ -162,11 +252,180 @@ final class SystemImageStore: NSObject, ObservableObject {
     }
 
     func installCatalogImage(_ item: OfficialCatalogImage) {
+        let displayName = item.shortRevision.isEmpty
+            ? item.title
+            : "\(item.title) · \(item.shortRevision)"
         installFromRemoteURL(
             item.downloadURL,
-            preferredName: item.title,
-            sourceDescription: "Kho chính thức (\(item.id))"
+            preferredName: displayName,
+            sourceDescription: "Kho chính thức (\(item.sourceName) • \(item.releaseTag) • \(item.id))"
         )
+    }
+
+    func refreshOfficialCatalogIfNeeded() async {
+        if let last = catalogLastRefreshed, Date().timeIntervalSince(last) < 600 {
+            return
+        }
+        await refreshOfficialCatalog()
+    }
+
+    func refreshOfficialCatalog() async {
+        guard !isRefreshingCatalog else { return }
+        isRefreshingCatalog = true
+        catalogRefreshError = nil
+        defer { isRefreshingCatalog = false }
+
+        let feeds: [(name: String, url: URL)] = [
+            ("Dynarium Releases", URL(string: "https://api.github.com/repos/userlethekhoi/dynarium/releases?per_page=10")!),
+            ("Kernarium Releases", URL(string: "https://api.github.com/repos/imxieyi/Kernarium/releases?per_page=10")!)
+        ]
+
+        let builtinByID = Dictionary(
+            uniqueKeysWithValues: OfficialCatalogImage.builtinCatalog.map { ($0.id, $0) }
+        )
+
+        var discovered: [OfficialCatalogImage] = []
+        var seenIDs = Set<String>()
+        var succeededFeedCount = 0
+        var lastErrorDescription: String?
+
+        for feed in feeds {
+            do {
+                let items = try await Self.fetchCatalogFeed(
+                    from: feed.url,
+                    sourceName: feed.name,
+                    builtinByID: builtinByID
+                )
+                succeededFeedCount += 1
+                for item in items where seenIDs.insert(item.id).inserted {
+                    discovered.append(item)
+                }
+            } catch {
+                lastErrorDescription = error.localizedDescription
+            }
+        }
+
+        if succeededFeedCount == 0 {
+            catalogRefreshError = lastErrorDescription ?? "Không thể tải danh sách phiên bản mới từ GitHub."
+            return
+        }
+
+        for item in OfficialCatalogImage.builtinCatalog where seenIDs.insert(item.id).inserted {
+            discovered.append(item)
+        }
+
+        discovered.sort { lhs, rhs in
+            let lDate = lhs.publishedLabel ?? ""
+            let rDate = rhs.publishedLabel ?? ""
+            if lDate != rDate {
+                return lDate > rDate
+            }
+            return lhs.id > rhs.id
+        }
+
+        catalogImages = discovered
+        catalogLastRefreshed = Date()
+    }
+
+    private static func fetchCatalogFeed(
+        from url: URL,
+        sourceName: String,
+        builtinByID: [String: OfficialCatalogImage]
+    ) async throws -> [OfficialCatalogImage] {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Dynarium-iOS", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 403 || http.statusCode == 429 {
+                throw NSError(
+                    domain: "DynariumCatalog",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "GitHub API tạm giới hạn truy vấn. Vui lòng thử lại sau ít phút hoặc mở trang phát hành."]
+                )
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw NSError(
+                    domain: "DynariumCatalog",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "Máy chủ phản hồi mã HTTP \(http.statusCode)."]
+                )
+            }
+        }
+
+        let releases = try JSONDecoder().decode([GitHubReleaseDTO].self, from: data)
+        let supportedExts = [".tar.zst", ".tar.gz", ".tgz"]
+        var items: [OfficialCatalogImage] = []
+
+        for release in releases where !release.draft {
+            for asset in release.assets {
+                let lower = asset.name.lowercased()
+                guard let matchedExt = supportedExts.first(where: { lower.hasSuffix($0) }) else {
+                    continue
+                }
+                guard asset.size >= 150 * 1024 * 1024 else { continue }
+                guard !lower.hasPrefix("android-6."),
+                      !lower.contains("-kernel"),
+                      !lower.contains("linux-") else {
+                    continue
+                }
+                guard lower.contains("lineage") || lower.contains("android") || lower.contains("rom") else {
+                    continue
+                }
+                guard let downloadURL = URL(string: asset.browser_download_url),
+                      let pageURL = URL(string: release.html_url) else {
+                    continue
+                }
+
+                let cleanID = String(asset.name.dropLast(matchedExt.count))
+                if let curated = builtinByID[cleanID] {
+                    items.append(
+                        OfficialCatalogImage(
+                            id: curated.id,
+                            title: curated.title,
+                            subtitle: curated.subtitle,
+                            androidMajor: curated.androidMajor,
+                            kernelVersion: curated.kernelVersion,
+                            pageProfile: curated.pageProfile,
+                            approximateDownloadBytes: asset.size > 0 ? asset.size : curated.approximateDownloadBytes,
+                            downloadURL: downloadURL,
+                            defaultDataGiB: curated.defaultDataGiB,
+                            releaseTag: curated.releaseTag,
+                            sourceName: sourceName,
+                            sourcePageURL: pageURL,
+                            badgeText: curated.badgeText,
+                            publishedLabel: release.publishedDateLabel ?? curated.publishedLabel
+                        )
+                    )
+                } else {
+                    let androidMajor = (lower.contains("lineage24") || lower.contains("android17")) ? "17" : "Android"
+                    let title = lower.contains("lineage24")
+                        ? "LineageOS 24 (Android 17)"
+                        : "Android ROM (\(release.tag_name))"
+                    items.append(
+                        OfficialCatalogImage(
+                            id: cleanID,
+                            title: title,
+                            subtitle: "Phát hành \(release.tag_name) từ \(sourceName)",
+                            androidMajor: androidMajor,
+                            kernelVersion: lower.contains("6.18") ? "Linux 6.18 LTS" : "User-Mode Linux",
+                            pageProfile: lower.contains("4k") ? "4 KiB Guest" : "Android ROM",
+                            approximateDownloadBytes: asset.size,
+                            downloadURL: downloadURL,
+                            defaultDataGiB: 16,
+                            releaseTag: release.tag_name,
+                            sourceName: sourceName,
+                            sourcePageURL: pageURL,
+                            badgeText: "Trực tuyến",
+                            publishedLabel: release.publishedDateLabel
+                        )
+                    )
+                }
+            }
+        }
+
+        return items
     }
 
     func installFromRemoteURL(

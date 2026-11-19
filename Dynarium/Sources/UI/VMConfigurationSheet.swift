@@ -51,12 +51,14 @@ struct VMConfigurationSheet: View {
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = min(max(min(safeRAM, 896), minRAM), maxAllowed)
                             config.retinaDisplay = false
+                            config.thermalSaverEnabled = true
                         }
                         PresetPillButton(title: "Khuyên dùng", icon: "checkmark.shield") {
                             let targetVCPUs = hardware.defaultVCPUs()
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: targetVCPUs)
                             config.retinaDisplay = hardware.defaultRetinaDisplay()
+                            config.thermalSaverEnabled = false
                         }
                         PresetPillButton(title: "Hiệu năng", icon: "speedometer") {
                             let targetVCPUs = min(max(2, hardware.maxVCPUs / 2), hardware.maxVCPUs)
@@ -65,6 +67,7 @@ struct VMConfigurationSheet: View {
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = perfRAM
                             config.retinaDisplay = (hardware.edition == .metal4Vulkan)
+                            config.thermalSaverEnabled = false
                         }
                     }
                     .padding(.vertical, 2)
@@ -176,6 +179,7 @@ struct VMConfigurationSheet: View {
                     }
 
                     Toggle("Màn đen OLED khi bật AFK Eco Mode", isOn: $config.afkBlackoutEnabled)
+                    Toggle("Chế độ Mát máy (Giảm tải CPU & tiết kiệm pin)", isOn: $config.thermalSaverEnabled)
                 }
             }
             .navigationTitle(mode == .create ? "Tạo máy ảo mới" : "Cấu hình máy ảo")

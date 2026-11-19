@@ -391,28 +391,28 @@ jobs:
           python3 - "$TAG" "$NOTES_FILE" <<'PYEOF'
           import pathlib, sys
           tag, notes_path = sys.argv[1], sys.argv[2]
-          notes = f"""# Dynarium {tag} Final — Hypervisor Android 17 (LineageOS 24) cho iOS & iPadOS
+          notes = f"""# Dynarium {tag} — Hypervisor Android 17 (LineageOS 24) cho iOS & iPadOS
 
           ## Chọn file `.ipa` phù hợp thiết bị của bạn
 
           | Phiên bản `.ipa` | Thiết bị khuyên dùng | Công nghệ đồ họa |
           | :--- | :--- | :--- |
-          | **`Dynarium-{tag}-Metal4-iOS26.ipa`** | **Khuyên dùng cho iOS 26.0 / 27.0+** (iPhone 12 / A14, iPad M1 trở lên) | **Tăng tốc GPU phần cứng Metal 4 / Vulkan 1.4** (`KosmicKrisp + Mesa Zink`), mượt & nhẹ RAM hơn |
-          | **`Dynarium-{tag}.ipa`** | **Tương thích rộng iOS 16.0 – iOS 27+** (AltStore, SideStore, TrollStore, mọi chip) | CPU `Mesa softpipe` an toàn không cần JIT (`DRAW_USE_LLVM=0`), tự nâng lên `llvmpipe` khi có JIT |
+          | **`Dynarium-{tag}-Metal4-iOS26.ipa`** | **Khuyên dùng cho iOS 26.0 / 27.0+** (iPhone 12 / A14, iPad M1 trở lên) | **Tăng tốc GPU phần cứng Metal 4 / Vulkan 1.4** (`KosmicKrisp + Mesa Zink`), mượt & nhẹ RAM/mát máy hơn |
+          | **`Dynarium-{tag}.ipa`** | **Tương thích rộng iOS 16.0 – iOS 27+** (AltStore, SideStore, TrollStore, mọi chip) | CPU `Mesa softpipe` tối ưu RAM/OpenGL ES 3.0 (`DRAW_USE_LLVM=0`), tự nâng lên `llvmpipe` khi có JIT |
 
-          ## Điểm mới trong bản Final `{tag}`
+          ## Điểm mới trong `{tag}`
 
-          - **Khắc phục triệt để lỗi đen màn hình -> văng app trên thiết bị thực tế:** Khóa an toàn `DRAW_USE_LLVM=0` ngay khi khởi tạo quy trình, chuyển luồng chạy runtime sang Thread riêng stack `8 MiB`, tự tắt Retina & cân chỉnh RAM theo trần `os_proc_available_memory()` thực tế (tránh Jetsam OOM trên máy trần 2.2–2.3 GiB), và chống khóa màn hình khi boot lần đầu.
-          - **Màn hình tiến trình khởi động trực quan (Live Boot Progress):** Hiển thị từng bước khởi chạy Linux 6.18 / phân vùng `data.img` / đồ họa Android kèm đồng hồ đếm giây và nút mở nhanh Serial Console.
-          - **Cảnh báo & Tối ưu an toàn 1 chạm:** Tự đọc `session.record` thành thông báo tiếng Việt dễ hiểu khi phiên trước bị iOS thu hồi RAM và cho phép hạ cấu hình an toàn chỉ với 1 chạm.
-          - **Hoàn thiện giao diện Apple HIG:** Sửa lệch tâm các nút hành động, hết cắt chữ thông số chip/iOS/ROM và thêm bộ 3 cấu hình nhanh (`Tiết kiệm RAM`, `Khuyên dùng`, `Hiệu năng`).
+          - **Giảm mạnh mức chiếm RAM chống Jetsam OOM & màn hình đen:** Khi chạy trên máy có trần RAM tiến trình <= 2.8 GiB, tự động giới hạn bộ nhớ đệm Gadget Engine xuống `64 MiB`, tắt tải trước shader/GL của Zygote (`guest_disable_renderer_preload=true`), khóa `GLES 3.0` (`196608`) & `vulkan=none` cho bộ dựng hình CPU `softpipe`, rút gọn bộ nhớ nhàn rỗi GPU (`UML_GPU_IDLE_TRIM_MS`), hạ trần khuyên dùng mặc định về `768 MiB` và bật tỉa trang RAM tự động.
+          - **Theo dõi nhiệt độ thời gian thực & Chế độ Mát máy:** Tự động phát hiện mức nhiệt `.serious` / `.critical` từ iOS để điều tiết CPU/FPS chống quá nhiệt, kèm nút bật nhanh **Chế độ Mát máy** trong cấu hình và thanh công cụ nổi.
+          - **Kho ROM đa phiên bản chính thức & Custom ROM:** Hiển thị nhiều bản phát hành chính thức (`los24-r28` mới nhất & `los24-r22` ổn định), hỗ trợ kéo để làm mới danh sách từ GitHub Releases chính thức, mở trực tiếp trang phát hành gốc và nhập tệp ROM tự custom (`.tar.gz` / `.tar.zst` / URL) kèm hướng dẫn cấu trúc.
+          - **Chẩn đoán phiên chạy chi tiết:** Phân tích thành phần đỉnh RAM (Guest / Đồ họa / Cache / Malloc) và xem nhanh nhật ký kernel cuối phiên ngay trong danh sách máy ảo.
 
           ## Hướng dẫn thiết lập nhanh (Mô hình VMware)
 
-          1. Cài file `.ipa` tương ứng qua TrollStore / AltStore / SideStore.
-          2. Mở tab **Kho ROM** -> bấm **Tải về ngay (1 chạm)** để tải LineageOS 24 (Android 17) hoặc nhập tệp `.tar.gz` / `.tar.zst` có sẵn.
-          3. Sang tab **Máy ảo** -> bấm **+** tạo máy ảo mới (mặc định đã tự cân chỉnh an toàn) và khởi động.
-          4. Trong phiên chạy, dùng thanh công cụ nổi để **Cài APK / APKS / APKM**, mở **PiP** hoặc bật **AFK Eco Mode**.
+          1. Cài file `.ipa` tương ứng (khuyên dùng `Metal4-iOS26.ipa` nếu máy chạy iOS 26/27 và chip A14/M1 trở lên).
+          2. Mở tab **Kho ROM** -> bấm **Tải trực tiếp trong app** (hỗ trợ chọn phiên bản hoặc tải từ trang phát hành chính thức / nhập tệp tự custom).
+          3. Sang tab **Máy ảo** -> bấm **+** tạo máy ảo mới (đã tự động căn chuẩn RAM/vCPU an toàn) và khởi động.
+          4. Trong phiên chạy, dùng thanh công cụ nổi để bật **Chế độ Mát máy**, **AFK Eco Mode**, **PiP** hoặc **Cài APK / APKS / APKM**.
 
           > Ghi công cốt lõi: xây dựng trên nền tảng [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) và cảm hứng từ [`ish-app/ish`](https://github.com/ish-app/ish).
           """

@@ -100,6 +100,15 @@ struct FloatingSessionHUD: View {
                             }
 
                             Button {
+                                session.setCoolMode(!session.coolModeEnabled)
+                            } label: {
+                                Label(
+                                    session.coolModeEnabled ? "Tắt chế độ Mát máy" : "Bật chế độ Mát máy",
+                                    systemImage: session.coolModeEnabled ? "thermometer.snowflake" : "thermometer.medium"
+                                )
+                            }
+
+                            Button {
                                 session.setMicrophone(enabled: !session.microphoneOn)
                             } label: {
                                 Label(

@@ -105,6 +105,7 @@ final class HostHardwareProfile: ObservableObject {
     @Published private(set) var debuggerAttached: Bool = false
 
     static func configureProcessEnvironmentBeforeFirstUse() {
+        let availBytes = dynarium_available_memory_bytes()
         let hasKosmicKrisp: Bool = {
             guard let frameworksURL = Bundle.main.privateFrameworksURL else { return false }
             return FileManager.default.fileExists(
@@ -114,9 +115,14 @@ final class HostHardwareProfile: ObservableObject {
 
         if hasKosmicKrisp {
             setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1)
+            if availBytes > 0 && availBytes < 2_800 * Bytes.mib {
+                setenv("UML_GPU_IDLE_TRIM_MS", "400", 1)
+            }
             return
         }
 
+        // Trim idle Mesa software GL contexts frequently so textures/buffers do not accumulate in CPU RAM.
+        setenv("UML_GPU_IDLE_TRIM_MS", "250", 1)
         setenv("LIBGL_ALWAYS_SOFTWARE", "true", 1)
         #if targetEnvironment(simulator)
         setenv("GALLIUM_DRIVER", "llvmpipe", 1)
@@ -311,9 +317,11 @@ final class HostHardwareProfile: ObservableObject {
 
         let target: Int
         if limitMiB < 2000 {
-            target = 768
-        } else if limitMiB < 2800 {
-            target = edition == .universalSoftware ? 1024 : 1152
+            target = (edition == .universalSoftware && limitMiB < 1850) ? 640 : 768
+        } else if limitMiB < 2600 {
+            target = edition == .universalSoftware ? 768 : 1024
+        } else if limitMiB < 3000 {
+            target = edition == .universalSoftware ? 1024 : 1280
         } else if limitMiB < 3800 {
             target = min(1536, runtimeDefault)
         } else {
@@ -340,19 +348,20 @@ final class HostHardwareProfile: ObservableObject {
             )
         }
 
-        let baseOverhead = edition == .universalSoftware ? 340 : 280
-        let vcpuOverhead = vm.vcpuCount * 72
+        let baseOverhead = edition == .universalSoftware ? 420 : 280
+        let vcpuOverhead = vm.vcpuCount * 80
         let displayOverhead = vm.retinaDisplay
-            ? (edition == .universalSoftware ? 280 : 140)
-            : 60
+            ? (edition == .universalSoftware ? 320 : 140)
+            : 120
         let estimatedTotalMiB = vm.guestMemoryMiB + baseOverhead + vcpuOverhead + displayOverhead
-        let safeCeilingMiB = max(768, limitMiB - 220)
+        let safeCeilingMiB = max(768, limitMiB - 300)
         let riskyRetinaOnLowLimit = edition == .universalSoftware && vm.retinaDisplay && limitMiB < 3200
+        let exceedsUniversalSafeTarget = (edition == .universalSoftware && limitMiB < 2600 && vm.guestMemoryMiB > suggestedMemoryMiB)
         let budget = evaluateGpuBudget(memoryMiB: vm.guestMemoryMiB, vcpus: vm.vcpuCount)
 
-        if estimatedTotalMiB > safeCeilingMiB || budget.shortOfFloor || riskyRetinaOnLowLimit {
+        if estimatedTotalMiB > safeCeilingMiB || budget.shortOfFloor || riskyRetinaOnLowLimit || exceedsUniversalSafeTarget {
             let retinaNote = vm.retinaDisplay ? ", Retina" : ""
-            let reason = "Cấu hình hiện tại (\(vm.vcpuCount) vCPU, \(Formats.size(mib: vm.guestMemoryMiB))\(retinaNote)) dễ vượt trần RAM \(Formats.size(mib: limitMiB)) trên thiết bị này. Đề xuất hạ về \(suggestedVCPUs) vCPU, \(Formats.size(mib: suggestedMemoryMiB)) và tắt Retina để chạy ổn định."
+            let reason = "Cấu hình hiện tại (\(vm.vcpuCount) vCPU, \(Formats.size(mib: vm.guestMemoryMiB))\(retinaNote)) dễ chạm trần RAM \(Formats.size(mib: limitMiB)) trên thiết bị này. Đề xuất hạ về \(suggestedVCPUs) vCPU, \(Formats.size(mib: suggestedMemoryMiB)) và tắt Retina để chạy ổn định."
             return LaunchSafetyAssessment(
                 needsOptimization: true,
                 suggestedVCPUs: suggestedVCPUs,

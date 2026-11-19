@@ -74,6 +74,9 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published var startSpaceShortage: StartSpace?
     @Published private(set) var afkEcoMode: Bool = false
     @Published private(set) var oledBlackoutActive: Bool = false
+    @Published private(set) var coolModeEnabled: Bool = false
+    @Published private(set) var thermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
+    @Published private(set) var thermalAutoThrottleActive: Bool = false
     @Published private(set) var microphoneOn: Bool = false
     @Published private(set) var adbLanAddress: String?
     @Published var keyboardVisible: Bool = false
@@ -99,6 +102,9 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private var bootLaunchedForSession = false
     private var consoleLineBuffer = ""
     private var runtimeThread: Thread?
+    private var thermalObserver: NSObjectProtocol?
+    private var lastAppliedThrottleState: Bool?
+    private var lastAppliedPageTrimState: Bool?
     private var statsTimer: Task<Void, Never>?
     private var spaceCheckTask: Task<Void, Never>?
     private var spacePauser: SpacePauser?
@@ -113,13 +119,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
     private init() {
         spacePauser = SpacePauser(effects: self)
-        pipController.setStateHandler { [weak self] active in
-            guard let self else { return }
-            if active && self.afkEcoMode {
-                self.applyAfkThrottling(enabled: true)
-            } else if !active && !self.afkEcoMode && !self.isInBackground {
-                self.applyAfkThrottling(enabled: false)
-            }
+        pipController.setStateHandler { [weak self] _ in
+            self?.applyRuntimeResourcePolicies()
         }
     }
 
@@ -149,6 +150,11 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         spacePause = nil
         afkEcoMode = false
         oledBlackoutActive = false
+        coolModeEnabled = vm.thermalSaverEnabled
+        thermalState = ProcessInfo.processInfo.thermalState
+        thermalAutoThrottleActive = (thermalState == .serious || thermalState == .critical)
+        lastAppliedThrottleState = nil
+        lastAppliedPageTrimState = nil
         keyboardVisible = false
         bootLaunchedForSession = false
         initialGeometry = nil
@@ -227,15 +233,30 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                     if case .restarting = self.phase {
                         self.phase = .running(vmName: currentName)
                     }
-                    if self.afkEcoMode {
-                        self.applyAfkThrottling(enabled: true)
-                    }
+                    self.lastAppliedThrottleState = nil
+                    self.lastAppliedPageTrimState = nil
+                    self.applyRuntimeResourcePolicies()
                 }
             }
         }
 
         view.setGuestDisplay(width: width, height: height)
         UIApplication.shared.isIdleTimerDisabled = true
+
+        if let existingObserver = thermalObserver {
+            NotificationCenter.default.removeObserver(existingObserver)
+        }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.thermalState = ProcessInfo.processInfo.thermalState
+                self.applyRuntimeResourcePolicies()
+            }
+        }
 
         if case .booting(let name) = phase {
             phase = .running(vmName: name)
@@ -247,6 +268,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             setAdbOverLan(enabled: true)
         }
         startMonitoringLoops()
+        applyRuntimeResourcePolicies()
 
         let metalViewBox = UncheckedViewBox(view: view)
         // Occupies a dedicated 8 MiB stack Thread rather than Swift's 512 KiB cooperative pool.
@@ -356,6 +378,13 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private func runtimeDidExit(code: Int32, message: String?) {
         runtimeThread = nil
         UIApplication.shared.isIdleTimerDisabled = false
+        if let thermalObserver {
+            NotificationCenter.default.removeObserver(thermalObserver)
+            self.thermalObserver = nil
+        }
+        thermalAutoThrottleActive = false
+        lastAppliedThrottleState = nil
+        lastAppliedPageTrimState = nil
         stopMonitoringLoops()
         setAdbOverLan(enabled: false)
         pipController.stop()
@@ -442,13 +471,18 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
     func setAfkEcoMode(_ enabled: Bool) {
         afkEcoMode = enabled
-        applyAfkThrottling(enabled: enabled)
+        applyRuntimeResourcePolicies()
         if enabled {
             keyboardVisible = false
             oledBlackoutActive = activeVM?.afkBlackoutEnabled ?? true
         } else {
             oledBlackoutActive = false
         }
+    }
+
+    func setCoolMode(_ enabled: Bool) {
+        coolModeEnabled = enabled
+        applyRuntimeResourcePolicies()
     }
 
     func togglePiP() {
@@ -511,7 +545,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             isInBackground = true
             beginBackgroundTaskIfNeeded()
             if pipController.isActive || afkEcoMode {
-                applyAfkThrottling(enabled: true)
+                applyRuntimeResourcePolicies()
             } else {
                 adbClock.setPaused(true)
                 runtimeQueue.async {
@@ -527,19 +561,28 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 kernarium_runtime_loader_resume()
                 _ = kernarium_runtime_loader_set_gpu_hold(0)
             }
-            if !afkEcoMode && !pipController.isActive {
-                applyAfkThrottling(enabled: false)
-            }
+            applyRuntimeResourcePolicies()
         default:
             break
         }
     }
 
-    private func applyAfkThrottling(enabled: Bool) {
-        let flag: Int32 = enabled ? 1 : 0
-        _ = kernarium_runtime_loader_set_background_throttle(flag)
-        runtimeQueue.async {
-            _ = kernarium_runtime_loader_set_page_cache_trimming(flag)
+    private func applyRuntimeResourcePolicies() {
+        let hot = (thermalState == .serious || thermalState == .critical)
+        thermalAutoThrottleActive = hot
+
+        let shouldThrottle = afkEcoMode || coolModeEnabled || hot || (isInBackground && pipController.isActive)
+        let shouldTrimPages = shouldThrottle || hardware.isMemoryEntitlementLimited
+
+        if lastAppliedThrottleState != shouldThrottle {
+            lastAppliedThrottleState = shouldThrottle
+            _ = kernarium_runtime_loader_set_background_throttle(shouldThrottle ? 1 : 0)
+        }
+        if lastAppliedPageTrimState != shouldTrimPages {
+            lastAppliedPageTrimState = shouldTrimPages
+            runtimeQueue.async {
+                _ = kernarium_runtime_loader_set_page_cache_trimming(shouldTrimPages ? 1 : 0)
+            }
         }
     }
 

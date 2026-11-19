@@ -76,6 +76,7 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <malloc/malloc.h>
+#include <os/proc.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -882,7 +883,8 @@ void appendKernelCommandLine(
     uint32_t dotsPerInch,
     uint32_t guestProcessorCount,
     std::string_view adbPublicKey,
-    std::string_view timeZone)
+    std::string_view timeZone,
+    bool tightMemoryHost)
 {
     const auto path = storage.release() / uml::android::releaseCommandLine;
     constexpr std::string_view adbAuthorizationPrefix {
@@ -894,9 +896,29 @@ void appendKernelCommandLine(
         kernarium::adb::keyPrefix,
         kernarium::adb::tcpPrefix,
         kernarium::timezone::prefix};
-    for (auto& argument :
-         uml::android::readKernelCommandLine(path, launcherPrefixes))
+    auto releaseArguments =
+        uml::android::readKernelCommandLine(path, launcherPrefixes);
+    for (auto& argument : releaseArguments) {
+#if UML_GPU_SOFTWARE_RENDERER
+        if (argument.starts_with("androidboot.opengles.version=")) {
+            argument = "androidboot.opengles.version=196608";
+        } else if (argument.starts_with("androidboot.hardware.vulkan=")) {
+            argument = "androidboot.hardware.vulkan=none";
+        } else if (argument.starts_with(
+                       "androidboot.hardware.guest_disable_renderer_preload=")) {
+            argument =
+                "androidboot.hardware.guest_disable_renderer_preload=true";
+        }
+#else
+        if (tightMemoryHost &&
+            argument.starts_with(
+                "androidboot.hardware.guest_disable_renderer_preload=")) {
+            argument =
+                "androidboot.hardware.guest_disable_renderer_preload=true";
+        }
+#endif
         arguments.push_back(std::move(argument));
+    }
 
     /* Android init imports this as ro.boot.lcd_density. The product's vendor
      * init then publishes the same value as ro.sf.lcd_density, keeping the
@@ -1078,6 +1100,7 @@ struct GuestRequest final {
      * the gadget engine. Only a request that asked for the JIT, on a runtime
      * that has one and found its executable memory ready, sets it. */
     std::size_t jitCacheBudget {};
+    bool tightMemoryHost {};
 #if KERNARIUM_RUNTIME_ANDROID_GUEST
     /* The guest's two disks: the release's system disk and the instance's
      * data disk. */
@@ -1337,6 +1360,9 @@ private:
         if (!request_.sessionRecordPath.empty())
             arguments.emplace_back(
                 "--session-record=" + request_.sessionRecordPath);
+        if (request_.tightMemoryHost) {
+            arguments.emplace_back("--gadget-cache-budget=64M");
+        }
 #ifndef UML_APP_STORE_RUNTIME
         if (request_.jitCacheBudget != 0) {
             /* The later engine argument wins, and the budget is the one the
@@ -1417,7 +1443,8 @@ private:
             request_.dotsPerInch,
             request_.guestProcessorCount,
             request_.adbPublicKey,
-            request_.timeZone);
+            request_.timeZone,
+            request_.tightMemoryHost);
 #else
         /* A sealed ext4 derivative is attached read-only; the per-run /init
          * mounts either kind of image beneath the overlay. */
@@ -1506,6 +1533,24 @@ constexpr std::uint64_t mebibyte = 1024ULL * 1024ULL;
  * prepared) carries it beside its own cache, and the plan counts it as engine
  * memory so the GPU does not take what it holds. The application's estimate
  * before a start takes the memory as used. */
+bool isTightMemoryHost() noexcept
+{
+    task_vm_info_data_t info {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(
+            mach_task_self(),
+            TASK_VM_INFO,
+            reinterpret_cast<task_info_t>(&info),
+            &count) == KERN_SUCCESS &&
+        count >= TASK_VM_INFO_COUNT &&
+        info.limit_bytes_remaining != 0) {
+        return (info.phys_footprint + info.limit_bytes_remaining) <=
+            2800ULL * mebibyte;
+    }
+    const std::size_t avail = os_proc_available_memory();
+    return avail != 0 && avail <= 2800ULL * mebibyte;
+}
+
 uml::emulator::GpuBudgetPlan planGpuBudget(
     const kernarium_runtime_boot* boot,
     std::uint32_t guestMemoryMiB,
@@ -1521,10 +1566,10 @@ uml::emulator::GpuBudgetPlan planGpuBudget(
 #endif
     auto plan = uml::emulator::plan_gpu_budget(
         static_cast<std::uint64_t>(guestMemoryMiB) * mebibyte,
-        /* The host sets the limit; a launch states neither it nor the
-         * gadget cache. */
+        /* The host sets the limit; a launch states neither it; on tight-memory
+         * iOS hosts the runtime caps the gadget cache to 64 MiB. */
         0,
-        0,
+        isTightMemoryHost() ? static_cast<std::size_t>(64ULL * mebibyte) : 0,
         guestProcessorCount,
         {
             .application = boot->gpu_budget_application_mib * mebibyte,
@@ -1726,6 +1771,7 @@ int runtimeRun(
         request.dotsPerInch = dotsPerInch;
         request.guestMemoryMiB = guestMemoryMiB;
         request.guestProcessorCount = guestProcessorCount;
+        request.tightMemoryHost = isTightMemoryHost();
 #ifndef UML_APP_STORE_RUNTIME
         if (boot->struct_size >=
                 bootSizeBeforeJit + sizeof(boot->use_jit) &&
