@@ -41,7 +41,7 @@ struct VMSessionView: View {
                     keyboardVisible: $session.keyboardVisible,
                     retinaMode: vm.retinaDisplay,
                     touchDidBegin: {
-                        if !hudCollapsed {
+                        if session.telemetry.displayActive && !hudCollapsed {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 hudCollapsed = true
                             }
@@ -58,6 +58,23 @@ struct VMSessionView: View {
                 coversScreen = covers
             }
             .allowsHitTesting(false)
+
+            if session.shouldShowBootOverlay && !session.oledBlackoutActive && session.spacePause == nil {
+                BootProgressOverlay(
+                    vmName: session.activeVM?.name ?? "Android",
+                    stage: session.bootStage,
+                    startedAt: session.bootStartedAt,
+                    isFirstBoot: session.isFirstBootSession,
+                    telemetry: session.telemetry,
+                    onOpenConsole: { presentingConsole = true },
+                    onDismiss: {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            session.bootOverlayDismissed = true
+                        }
+                    }
+                )
+                .transition(.opacity)
+            }
 
             if session.oledBlackoutActive {
                 OLEDBlackoutOverlay(
@@ -267,6 +284,152 @@ private struct ApkInstallBanner: View {
     }
 }
 
+private struct BootProgressOverlay: View {
+    let vmName: String
+    let stage: BootStage
+    let startedAt: Date
+    let isFirstBoot: Bool
+    let telemetry: VMTelemetrySnapshot
+    let onOpenConsole: () -> Void
+    let onDismiss: () -> Void
+
+    private struct StepItem: Identifiable {
+        let id: BootStage
+        let title: String
+        let detail: String
+    }
+
+    private var steps: [StepItem] {
+        [
+            StepItem(
+                id: .preparing,
+                title: "Chuẩn bị đĩa ảo & Hypervisor",
+                detail: "Nạp nhân Linux 6.18 LTS và ánh xạ vùng nhớ"
+            ),
+            StepItem(
+                id: .kernelBooting,
+                title: "Khởi chạy nhân hệ điều hành",
+                detail: "Nạp trình điều khiển Virtio & hệ thống tệp"
+            ),
+            StepItem(
+                id: .formattingOrInit,
+                title: isFirstBoot ? "Khởi tạo phân vùng dữ liệu Android" : "Gắn phân vùng & dịch vụ Android",
+                detail: isFirstBoot
+                    ? "Lần đầu tạo định dạng F2FS mất khoảng 45–90 giây"
+                    : "Khởi động tiến trình init & các dịch vụ hệ thống"
+            ),
+            StepItem(
+                id: .startingGraphics,
+                title: "Khởi động đồ họa SurfaceFlinger",
+                detail: "Kết xuất giao diện Android lên màn hình"
+            ),
+        ]
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.68).ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 9, height: 9)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Đang khởi động \(vmName)")
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(isFirstBoot ? "Thiết lập lần đầu — vui lòng chờ" : "Đang nạp hệ thống Android 17")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    TimelineView(.periodic(from: startedAt, by: 1)) { ctx in
+                        let elapsed = max(0, Int(ctx.date.timeIntervalSince(startedAt)))
+                        Text(Formats.elapsed(elapsed))
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(steps) { step in
+                        HStack(alignment: .top, spacing: 12) {
+                            stepIndicator(for: step.id)
+                                .frame(width: 22, height: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(step.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(stage.rawValue < step.id.rawValue ? .secondary : .primary)
+                                Text(step.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(stage == step.id ? Color.accentColor : Color.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+
+                Divider()
+
+                HStack {
+                    Text("CPU \(Int(telemetry.cpuUtilizationPercent.rounded()))%")
+                    Text("•")
+                    Text("RAM đang giữ \(Formats.size(bytes: telemetry.guestRamHeldBytes))")
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+                HStack(spacing: 10) {
+                    CenteredActionButton(
+                        title: "Mở Console",
+                        systemImage: "terminal",
+                        tone: .tinted,
+                        action: onOpenConsole
+                    )
+                    CenteredActionButton(
+                        title: "Ẩn bảng chờ",
+                        systemImage: "eye.slash",
+                        tone: .tinted,
+                        action: onDismiss
+                    )
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: 400)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5)
+            )
+            .padding(.horizontal, 20)
+            .padding(.bottom, 74)
+            .environment(\.colorScheme, .dark)
+        }
+    }
+
+    @ViewBuilder
+    private func stepIndicator(for step: BootStage) -> some View {
+        if stage.rawValue > step.rawValue {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(Color.accentColor)
+        } else if stage == step {
+            ProgressView()
+                .controlSize(.small)
+        } else {
+            Image(systemName: "circle")
+                .font(.system(size: 18))
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
 private struct LowSpacePauseModal: View {
     let spacePause: SpacePause
     let onResume: () -> Void
@@ -284,13 +447,23 @@ private struct LowSpacePauseModal: View {
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-                HStack {
-                    Button("Tắt máy ảo", role: .destructive, action: onStop)
-                        .buttonStyle(.bordered)
-                    Spacer()
-                    Button("Thử tiếp tục", action: onResume)
-                        .buttonStyle(.borderedProminent)
+                HStack(spacing: 10) {
+                    Button(action: onStop) {
+                        Text("Tắt máy ảo")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 38)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+
+                    Button(action: onResume) {
+                        Text("Thử tiếp tục")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 38)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
             .padding(20)
@@ -318,19 +491,30 @@ private struct EndedSessionModal: View {
 
                 Text(exitCode == 0 ? "Đã tắt \(vmName)" : "Phiên \(vmName) đã dừng")
                     .font(.headline)
+                    .multilineTextAlignment(.center)
 
                 if let note {
                     Text(note)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack(spacing: 12) {
-                    Button("Xem Console", action: onOpenConsole)
-                        .buttonStyle(.bordered)
-                    Button("Về màn hình chính", action: onDismiss)
-                        .buttonStyle(.borderedProminent)
+                HStack(spacing: 10) {
+                    Button(action: onOpenConsole) {
+                        Text("Xem Console")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 38)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(action: onDismiss) {
+                        Text("Màn hình chính")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 38)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
                 .padding(.top, 4)
             }

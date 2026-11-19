@@ -18,6 +18,13 @@ nonisolated enum DynariumEdition: String, Sendable {
         }
     }
 
+    var badgeShortTitle: String {
+        switch self {
+        case .universalSoftware: "Universal"
+        case .metal4Vulkan: "Metal 4"
+        }
+    }
+
     var descriptionText: String {
         switch self {
         case .universalSoftware:
@@ -66,6 +73,14 @@ nonisolated struct GpuBudgetEvaluation: Equatable, Sendable {
     var processLimitMiB: Int { Int(processLimitBytes / Bytes.mib) }
 }
 
+nonisolated struct LaunchSafetyAssessment: Equatable, Sendable {
+    let needsOptimization: Bool
+    let suggestedVCPUs: Int
+    let suggestedMemoryMiB: Int
+    let suggestedRetina: Bool
+    let reason: String?
+}
+
 @MainActor
 final class HostHardwareProfile: ObservableObject {
     static let shared = HostHardwareProfile()
@@ -73,8 +88,10 @@ final class HostHardwareProfile: ObservableObject {
     let machineIdentifier: String
     let deviceKindName: String
     let osVersionString: String
+    let osMajorVersion: Int
     let isRunningOnMac: Bool
     let metalDeviceName: String
+    let supportsMetal4Hardware: Bool
     let physicalMemoryBytes: UInt64
     let physicalProcessorCount: Int
     let maxVCPUs: Int
@@ -86,6 +103,34 @@ final class HostHardwareProfile: ObservableObject {
     @Published private(set) var availableProcessMemoryBytes: UInt64 = 0
     @Published private(set) var hostFreeDiskBytes: UInt64 = 0
     @Published private(set) var debuggerAttached: Bool = false
+
+    static func configureProcessEnvironmentBeforeFirstUse() {
+        let hasKosmicKrisp: Bool = {
+            guard let frameworksURL = Bundle.main.privateFrameworksURL else { return false }
+            return FileManager.default.fileExists(
+                atPath: frameworksURL.appendingPathComponent("KosmicKrisp.framework").path
+            )
+        }()
+
+        if hasKosmicKrisp {
+            setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1)
+            return
+        }
+
+        setenv("LIBGL_ALWAYS_SOFTWARE", "true", 1)
+        #if targetEnvironment(simulator)
+        setenv("GALLIUM_DRIVER", "llvmpipe", 1)
+        setenv("DRAW_USE_LLVM", "1", 1)
+        #else
+        if kernarium_runtime_loader_debugger_attached() != 0 {
+            setenv("GALLIUM_DRIVER", "llvmpipe", 1)
+            setenv("DRAW_USE_LLVM", "1", 1)
+        } else {
+            setenv("GALLIUM_DRIVER", "softpipe", 1)
+            setenv("DRAW_USE_LLVM", "0", 1)
+        }
+        #endif
+    }
 
     private init() {
         var uts = utsname()
@@ -103,11 +148,14 @@ final class HostHardwareProfile: ObservableObject {
         self.deviceKindName = isMac ? "Mac" : (isPad ? "iPad" : "iPhone")
 
         let os = ProcessInfo.processInfo.operatingSystemVersion
+        self.osMajorVersion = os.majorVersion
         self.osVersionString = os.patchVersion > 0
             ? "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
             : "\(os.majorVersion).\(os.minorVersion)"
 
-        self.metalDeviceName = MTLCreateSystemDefaultDevice()?.name ?? "Apple GPU"
+        let mtlDevice = MTLCreateSystemDefaultDevice()
+        self.metalDeviceName = mtlDevice?.name ?? "Apple GPU"
+        self.supportsMetal4Hardware = mtlDevice?.supportsFamily(.apple7) ?? false
         self.physicalMemoryBytes = ProcessInfo.processInfo.physicalMemory
 
         let cores = max(ProcessInfo.processInfo.processorCount, 1)
@@ -125,8 +173,8 @@ final class HostHardwareProfile: ObservableObject {
         }
 
         let info = Bundle.main.infoDictionary
-        self.appVersionString = (info?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
-        self.buildNumberString = (info?["CFBundleVersion"] as? String) ?? "1"
+        self.appVersionString = (info?["CFBundleShortVersionString"] as? String) ?? "1.1.0"
+        self.buildNumberString = (info?["CFBundleVersion"] as? String) ?? "2"
 
         refreshDynamicMetrics()
     }
@@ -140,6 +188,7 @@ final class HostHardwareProfile: ObservableObject {
     var chipGenerationLabel: String {
         if isRunningOnMac { return "Apple Silicon (Mac)" }
         let m = machineIdentifier
+        if m.hasPrefix("iPhone18,") { return "Apple A19 / A19 Pro" }
         if m.hasPrefix("iPhone17,") { return "Apple A18 / A18 Pro" }
         if m.hasPrefix("iPhone16,") { return "Apple A17 Pro" }
         if m.hasPrefix("iPhone15,") { return "Apple A16 Bionic" }
@@ -151,6 +200,21 @@ final class HostHardwareProfile: ObservableObject {
         if m.hasPrefix("iPad14,") { return "Apple M2" }
         if m.hasPrefix("iPad13,") { return "Apple M1" }
         return "\(metalDeviceName) (\(m))"
+    }
+
+    var recommendsMetal4Edition: Bool {
+        edition == .universalSoftware && osMajorVersion >= 26 && supportsMetal4Hardware
+    }
+
+    var isMemoryEntitlementLimited: Bool {
+        !isRunningOnMac && availableProcessMemoryBytes > 0 && availableProcessMemoryBytes < 2_500 * Bytes.mib
+    }
+
+    private var effectiveMemoryLimitMiB: Int {
+        guard !isRunningOnMac else { return 0 }
+        let budgetLimit = evaluateGpuBudget(memoryMiB: 1024, vcpus: 2).processLimitMiB
+        if budgetLimit > 0 { return budgetLimit }
+        return Int(availableProcessMemoryBytes / Bytes.mib)
     }
 
     func minimumMemoryMiB() -> Int { 512 }
@@ -216,15 +280,95 @@ final class HostHardwareProfile: ObservableObject {
         )
     }
 
+    func defaultRetinaDisplay() -> Bool {
+        guard edition == .metal4Vulkan else {
+            // CPU software rasterization uses ~9x more RAM & CPU at 3x Retina scale.
+            return false
+        }
+        let limitMiB = effectiveMemoryLimitMiB
+        return limitMiB == 0 || limitMiB >= 3200
+    }
+
     func defaultVCPUs() -> Int {
-        min(max(2, maxVCPUs / 2), maxVCPUs)
+        let limitMiB = effectiveMemoryLimitMiB
+        if edition == .universalSoftware || (limitMiB > 0 && limitMiB < 3000) {
+            return min(2, maxVCPUs)
+        }
+        return min(max(2, maxVCPUs / 2), maxVCPUs)
     }
 
     func recommendedMemoryMiB(for vcpus: Int) -> Int {
+        safeRecommendedMemoryMiB(for: vcpus)
+    }
+
+    func safeRecommendedMemoryMiB(for vcpus: Int) -> Int {
         let clampedVCPUs = min(max(1, vcpus), maxVCPUs)
-        let def = defaultMemoryMiB(vcpus: clampedVCPUs)
-        let maxAllowed = maximumMemoryMiB(vcpus: clampedVCPUs)
-        return min(max(512, def), maxAllowed)
+        let minAllowed = minimumMemoryMiB()
+        let maxAllowed = max(minAllowed, maximumMemoryMiB(vcpus: clampedVCPUs))
+        let runtimeDefault = min(max(minAllowed, defaultMemoryMiB(vcpus: clampedVCPUs)), maxAllowed)
+        let limitMiB = effectiveMemoryLimitMiB
+        guard limitMiB > 0 else { return runtimeDefault }
+
+        let target: Int
+        if limitMiB < 2000 {
+            target = 768
+        } else if limitMiB < 2800 {
+            target = edition == .universalSoftware ? 1024 : 1152
+        } else if limitMiB < 3800 {
+            target = min(1536, runtimeDefault)
+        } else {
+            target = runtimeDefault
+        }
+
+        let stepped = ((target + 32) / 64) * 64
+        return min(max(stepped, minAllowed), max(minAllowed, min(maxAllowed, runtimeDefault)))
+    }
+
+    func evaluateLaunchSafety(for vm: VirtualMachineConfig) -> LaunchSafetyAssessment {
+        let suggestedVCPUs = defaultVCPUs()
+        let suggestedMemoryMiB = safeRecommendedMemoryMiB(for: suggestedVCPUs)
+        let suggestedRetina = defaultRetinaDisplay()
+        let limitMiB = effectiveMemoryLimitMiB
+
+        guard limitMiB > 0 else {
+            return LaunchSafetyAssessment(
+                needsOptimization: false,
+                suggestedVCPUs: suggestedVCPUs,
+                suggestedMemoryMiB: suggestedMemoryMiB,
+                suggestedRetina: suggestedRetina,
+                reason: nil
+            )
+        }
+
+        let baseOverhead = edition == .universalSoftware ? 340 : 280
+        let vcpuOverhead = vm.vcpuCount * 72
+        let displayOverhead = vm.retinaDisplay
+            ? (edition == .universalSoftware ? 280 : 140)
+            : 60
+        let estimatedTotalMiB = vm.guestMemoryMiB + baseOverhead + vcpuOverhead + displayOverhead
+        let safeCeilingMiB = max(768, limitMiB - 220)
+        let riskyRetinaOnLowLimit = edition == .universalSoftware && vm.retinaDisplay && limitMiB < 3200
+        let budget = evaluateGpuBudget(memoryMiB: vm.guestMemoryMiB, vcpus: vm.vcpuCount)
+
+        if estimatedTotalMiB > safeCeilingMiB || budget.shortOfFloor || riskyRetinaOnLowLimit {
+            let retinaNote = vm.retinaDisplay ? ", Retina" : ""
+            let reason = "Cấu hình hiện tại (\(vm.vcpuCount) vCPU, \(Formats.size(mib: vm.guestMemoryMiB))\(retinaNote)) dễ vượt trần RAM \(Formats.size(mib: limitMiB)) trên thiết bị này. Đề xuất hạ về \(suggestedVCPUs) vCPU, \(Formats.size(mib: suggestedMemoryMiB)) và tắt Retina để chạy ổn định."
+            return LaunchSafetyAssessment(
+                needsOptimization: true,
+                suggestedVCPUs: suggestedVCPUs,
+                suggestedMemoryMiB: suggestedMemoryMiB,
+                suggestedRetina: suggestedRetina,
+                reason: reason
+            )
+        }
+
+        return LaunchSafetyAssessment(
+            needsOptimization: false,
+            suggestedVCPUs: suggestedVCPUs,
+            suggestedMemoryMiB: suggestedMemoryMiB,
+            suggestedRetina: suggestedRetina,
+            reason: nil
+        )
     }
 
     func resolvedGalliumDriver(preference: PreferredSoftwareBackend, jitActive: Bool) -> String {

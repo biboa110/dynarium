@@ -5,6 +5,12 @@ import GuestHostCore
 import SwiftUI
 import UIKit
 
+private struct PendingSafetyLaunch: Equatable {
+    let vm: VirtualMachineConfig
+    let image: SystemImageManifest
+    let safety: LaunchSafetyAssessment
+}
+
 struct MachinesListView: View {
     let switchToImagesTab: () -> Void
 
@@ -13,12 +19,14 @@ struct MachinesListView: View {
     @EnvironmentObject private var vmStore: VirtualMachineStore
     @EnvironmentObject private var session: VMRuntimeSession
 
+    @AppStorage("dynarium.dismissedMetal4Tip") private var dismissedMetal4Tip = false
     @State private var presentingCreate = false
     @State private var editingVM: VirtualMachineConfig?
     @State private var cloningVMID: UUID?
     @State private var confirmingWipeVM: VirtualMachineConfig?
     @State private var confirmingDeleteVM: VirtualMachineConfig?
     @State private var cloneErrorMessage: String?
+    @State private var pendingSafetyLaunch: PendingSafetyLaunch?
 
     var body: some View {
         NavigationStack {
@@ -32,6 +40,18 @@ struct MachinesListView: View {
                         deviceKindName: hardware.deviceKindName,
                         onWipe: { vmStore.wipeDataDisk(for: $0) },
                         onDelete: { vmStore.deleteVM($0) }
+                    )
+                )
+                .modifier(
+                    SafetyLaunchAlertModifier(
+                        pending: $pendingSafetyLaunch,
+                        onApplyAndStart: { item in
+                            let target = vmStore.applySafeProfile(for: item.vm.id, hardware: hardware) ?? item.vm
+                            session.start(vm: target, image: item.image)
+                        },
+                        onForceStart: { item in
+                            session.start(vm: item.vm, image: item.image)
+                        }
                     )
                 )
         }
@@ -62,6 +82,14 @@ struct MachinesListView: View {
         List {
             Section {
                 HardwareSummaryCard(hardware: hardware)
+                if hardware.recommendsMetal4Edition && !dismissedMetal4Tip {
+                    Metal4RecommendationBanner(
+                        chipLabel: hardware.chipGenerationLabel,
+                        osVersion: hardware.osVersionString
+                    ) {
+                        dismissedMetal4Tip = true
+                    }
+                }
             } header: {
                 Text("Nền tảng phần cứng")
             }
@@ -123,12 +151,18 @@ struct MachinesListView: View {
             image: linkedImage,
             diskAllocatedBytes: vmStore.dataDiskAllocatedBytes(for: vm.id),
             diskCreated: vmStore.dataDiskExists(for: vm.id),
-            lastNote: vmStore.lastSessionSummary(for: vm.id),
+            diagnostic: vmStore.lastSessionDiagnostic(for: vm.id),
             isCloning: cloningVMID == vm.id,
             canLaunch: !session.phase.isActive,
             onLaunch: { launch(vm) },
             onEdit: { editingVM = vm },
             onClone: { clone(vm) },
+            onApplySafeTune: {
+                _ = vmStore.applySafeProfile(for: vm.id, hardware: hardware)
+            },
+            onDismissDiagnostic: {
+                vmStore.clearSessionRecord(for: vm.id)
+            },
             onWipeData: { confirmingWipeVM = vm },
             onDelete: { confirmingDeleteVM = vm }
         )
@@ -139,11 +173,17 @@ struct MachinesListView: View {
     }
 
     private func launch(_ vm: VirtualMachineConfig) {
+        hardware.refreshDynamicMetrics()
         guard let image = imageStore.images.first(where: { $0.id == vm.systemImageID }) else {
             cloneErrorMessage = "ROM gắn với máy ảo này không còn tồn tại. Hãy chỉnh sửa để chọn ROM mới."
             return
         }
-        session.start(vm: vm, image: image)
+        let safety = hardware.evaluateLaunchSafety(for: vm)
+        if safety.needsOptimization {
+            pendingSafetyLaunch = PendingSafetyLaunch(vm: vm, image: image, safety: safety)
+        } else {
+            session.start(vm: vm, image: image)
+        }
     }
 
     private func clone(_ vm: VirtualMachineConfig) {
@@ -163,8 +203,8 @@ private struct HardwareSummaryCard: View {
     @ObservedObject var hardware: HostHardwareProfile
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.accentColor.opacity(0.14))
@@ -174,40 +214,42 @@ private struct HardwareSummaryCard: View {
                         .foregroundStyle(Color.accentColor)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(hardware.chipGenerationLabel)
                         .font(.headline)
-                    Text("iOS \(hardware.osVersionString) • \(hardware.metalDeviceName)")
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("iOS \(hardware.osVersionString) • \(hardware.deviceKindName)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 8)
 
-                Text(hardware.edition.badgeTitle)
+                Text(hardware.edition.badgeShortTitle)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                     .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    .fixedSize()
             }
 
             Divider()
 
-            HStack(spacing: 16) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
                 StatChip(
-                    label: "Tối đa vCPU",
+                    label: "Nhân vCPU",
                     value: "\(hardware.maxVCPUs)"
                 )
                 StatChip(
-                    label: "Trần RAM tiến trình",
+                    label: "Trần RAM",
                     value: hardware.availableProcessMemoryBytes > 0
                         ? Formats.size(bytes: hardware.availableProcessMemoryBytes)
                         : Formats.size(bytes: hardware.physicalMemoryBytes)
                 )
                 StatChip(
-                    label: "Trống trên máy",
+                    label: "Bộ nhớ trống",
                     value: Formats.size(bytes: hardware.hostFreeDiskBytes)
                 )
             }
@@ -221,13 +263,17 @@ private struct StatChip: View {
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
             Text(value)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -237,18 +283,19 @@ private struct NoImageGuidanceCard: View {
     let action: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Label("Chưa có hệ điều hành (ROM)", systemImage: "internaldrive")
                 .font(.headline)
             Text("Dynarium tách riêng Hypervisor và ROM giống VMware. Hãy tải LineageOS 24 (Android 17) từ Kho ROM hoặc nhập tệp .tar.gz / .tar.zst có sẵn để tạo máy ảo.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Button(action: action) {
-                Label("Mở Kho ROM để tải", systemImage: "square.and.arrow.down")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 2)
+                .fixedSize(horizontal: false, vertical: true)
+            CenteredActionButton(
+                title: "Mở Kho ROM để tải",
+                systemImage: "square.and.arrow.down",
+                tone: .prominent,
+                action: action
+            )
         }
         .padding(.vertical, 6)
     }
@@ -258,18 +305,19 @@ private struct NoMachineGuidanceCard: View {
     let action: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Label("Sẵn sàng tạo máy ảo đầu tiên", systemImage: "desktopcomputer")
                 .font(.headline)
             Text("ROM Android đã sẵn sàng. Hãy tạo máy ảo mới với thông số RAM/CPU được tự động tối ưu theo thiết bị của bạn.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Button(action: action) {
-                Label("Tạo máy ảo mới", systemImage: "plus.circle.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 2)
+                .fixedSize(horizontal: false, vertical: true)
+            CenteredActionButton(
+                title: "Tạo máy ảo mới",
+                systemImage: "plus.circle.fill",
+                tone: .prominent,
+                action: action
+            )
         }
         .padding(.vertical, 6)
     }
@@ -280,90 +328,113 @@ private struct VMRowView: View {
     let image: SystemImageManifest?
     let diskAllocatedBytes: UInt64
     let diskCreated: Bool
-    let lastNote: String?
+    let diagnostic: VMSessionDiagnostic?
     let isCloning: Bool
     let canLaunch: Bool
     let onLaunch: () -> Void
     let onEdit: () -> Void
     let onClone: () -> Void
+    let onApplySafeTune: () -> Void
+    let onDismissDiagnostic: () -> Void
     let onWipeData: () -> Void
     let onDelete: () -> Void
 
+    private var imageSubtitle: String {
+        guard let image else {
+            return "Thiếu ROM gắn kết — Cần chọn lại ROM"
+        }
+        if image.name.localizedCaseInsensitiveContains("Android") {
+            return image.name
+        }
+        return "\(image.name) • Android \(image.androidMajor)"
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color(.tertiarySystemFill))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 42, height: 42)
                     Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 19, weight: .medium))
+                        .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(image != nil ? Color.accentColor : Color.orange)
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(vm.name)
                         .font(.headline)
-                    if let image {
-                        Text("\(image.name) • Android \(image.androidMajor)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text("Thiếu ROM gắn kết — Cần chọn lại ROM")
-                            .font(.subheadline)
-                            .foregroundStyle(.orange)
-                    }
+                        .lineLimit(1)
+                    Text(imageSubtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(image != nil ? Color.secondary : Color.orange)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Spacer()
+                Spacer(minLength: 6)
 
                 if isCloning {
                     ProgressView()
+                        .frame(width: 38, height: 38)
                 } else {
-                    Menu {
+                    HStack(spacing: 8) {
+                        Menu {
+                            Button(action: onLaunch) {
+                                Label("Khởi động máy ảo", systemImage: "play.fill")
+                            }
+                            .disabled(!canLaunch || image == nil)
+
+                            Button(action: onEdit) {
+                                Label("Cấu hình phần cứng", systemImage: "slider.horizontal.3")
+                            }
+
+                            Button(action: onClone) {
+                                Label("Nhân bản nhanh (APFS)", systemImage: "doc.on.doc")
+                            }
+
+                            Divider()
+
+                            Button(role: .destructive, action: onWipeData) {
+                                Label("Đặt lại dữ liệu (Wipe)", systemImage: "eraser")
+                            }
+                            .disabled(!diskCreated)
+
+                            Button(role: .destructive, action: onDelete) {
+                                Label("Xóa máy ảo", systemImage: "trash")
+                            }
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(Color(.tertiarySystemFill))
+                                    .frame(width: 34, height: 34)
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+
                         Button(action: onLaunch) {
-                            Label("Khởi động máy ảo", systemImage: "play.fill")
+                            ZStack {
+                                Circle()
+                                    .fill((!canLaunch || image == nil) ? Color(.quaternarySystemFill) : Color.accentColor)
+                                    .frame(width: 38, height: 38)
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle((!canLaunch || image == nil) ? Color.secondary : Color.white)
+                                    .offset(x: 1)
+                            }
+                            .contentShape(Circle())
                         }
+                        .buttonStyle(.plain)
                         .disabled(!canLaunch || image == nil)
-
-                        Button(action: onEdit) {
-                            Label("Cấu hình phần cứng", systemImage: "slider.horizontal.3")
-                        }
-
-                        Button(action: onClone) {
-                            Label("Nhân bản nhanh (APFS)", systemImage: "doc.on.doc")
-                        }
-
-                        Divider()
-
-                        Button(role: .destructive, action: onWipeData) {
-                            Label("Đặt lại dữ liệu (Wipe)", systemImage: "eraser")
-                        }
-                        .disabled(!diskCreated)
-
-                        Button(role: .destructive, action: onDelete) {
-                            Label("Xóa máy ảo", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 20))
-                            .foregroundStyle(.secondary)
-                            .padding(4)
                     }
-
-                    Button(action: onLaunch) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(width: 34, height: 34)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .disabled(!canLaunch || image == nil)
                 }
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Label("\(vm.vcpuCount) vCPU", systemImage: "cpu")
                 Label(Formats.size(mib: vm.guestMemoryMiB), systemImage: "memorychip")
                 Label(
@@ -372,24 +443,101 @@ private struct VMRowView: View {
                         : "0 B / \(vm.dataDiskGiB) GiB",
                     systemImage: "internaldrive"
                 )
+                Spacer(minLength: 0)
+                if vm.retinaDisplay {
+                    Text("Retina")
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                }
             }
             .font(.caption)
             .monospacedDigit()
             .foregroundStyle(.secondary)
 
-            if let lastNote {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                    Text(lastNote)
+            if let diagnostic {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Text(diagnostic.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 4)
+                        Button(action: onDismissDiagnostic) {
+                            Image(systemName: "xmark")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.secondary)
+                                .padding(4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Text(diagnostic.message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if diagnostic.suggestsSafeTune {
+                        Button(action: onApplySafeTune) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "wrench.and.screwdriver.fill")
+                                    .font(.caption.weight(.semibold))
+                                Text("Tối ưu cấu hình an toàn")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .foregroundStyle(Color.accentColor)
+                            .frame(maxWidth: .infinity, minHeight: 32, alignment: .center)
+                            .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
+                    }
                 }
+                .padding(10)
+                .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.24), lineWidth: 0.5)
+                )
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct SafetyLaunchAlertModifier: ViewModifier {
+    @Binding var pending: PendingSafetyLaunch?
+    let onApplyAndStart: (PendingSafetyLaunch) -> Void
+    let onForceStart: (PendingSafetyLaunch) -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Điều chỉnh cấu hình tránh tràn RAM?",
+            isPresented: Binding(
+                get: { pending != nil },
+                set: { if !$0 { pending = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let item = pending {
+                Button("Tối ưu an toàn (\(item.safety.suggestedVCPUs) vCPU • \(Formats.size(mib: item.safety.suggestedMemoryMiB)))") {
+                    pending = nil
+                    onApplyAndStart(item)
+                }
+                Button("Vẫn chạy cấu hình hiện tại") {
+                    pending = nil
+                    onForceStart(item)
+                }
+            }
+            Button("Hủy", role: .cancel) { pending = nil }
+        } message: {
+            if let item = pending, let reason = item.safety.reason {
+                Text(reason)
+            }
+        }
     }
 }
 

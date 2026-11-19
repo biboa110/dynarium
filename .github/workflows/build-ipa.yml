@@ -391,21 +391,27 @@ jobs:
           python3 - "$TAG" "$NOTES_FILE" <<'PYEOF'
           import pathlib, sys
           tag, notes_path = sys.argv[1], sys.argv[2]
-          notes = f"""# Dynarium {tag} — Hypervisor Android 17 (LineageOS 24) cho iOS & iPadOS
+          notes = f"""# Dynarium {tag} Final — Hypervisor Android 17 (LineageOS 24) cho iOS & iPadOS
 
-          ## Chọn phiên bản `.ipa` phù hợp thiết bị
+          ## Chọn file `.ipa` phù hợp thiết bị của bạn
 
-          1. **`Dynarium-{tag}.ipa` (Universal • iOS 16.0 – iOS 27+):**
-             - Tương thích rộng mọi iPhone/iPad chạy **iOS 16.0 trở lên** (AltStore, SideStore, TrollStore).
-             - Tự động chọn **Mesa `softpipe`** an toàn trên máy chưa kích hoạt JIT và nâng lên **`llvmpipe`** khi phát hiện JIT/Debugger.
-          2. **`Dynarium-{tag}-Metal4-iOS26.ipa` (Metal 4 Hardware • iOS 26.0+ A14/M1+):**
-             - Tăng tốc phần cứng **Vulkan 1.4 / GLES 3.2** qua **KosmicKrisp + Mesa Zink** dành riêng cho **iOS 26.0+** trên chip A14 / M1 trở lên.
+          | Phiên bản `.ipa` | Thiết bị khuyên dùng | Công nghệ đồ họa |
+          | :--- | :--- | :--- |
+          | **`Dynarium-{tag}-Metal4-iOS26.ipa`** | **Khuyên dùng cho iOS 26.0 / 27.0+** (iPhone 12 / A14, iPad M1 trở lên) | **Tăng tốc GPU phần cứng Metal 4 / Vulkan 1.4** (`KosmicKrisp + Mesa Zink`), mượt & nhẹ RAM hơn |
+          | **`Dynarium-{tag}.ipa`** | **Tương thích rộng iOS 16.0 – iOS 27+** (AltStore, SideStore, TrollStore, mọi chip) | CPU `Mesa softpipe` an toàn không cần JIT (`DRAW_USE_LLVM=0`), tự nâng lên `llvmpipe` khi có JIT |
+
+          ## Điểm mới trong bản Final `{tag}`
+
+          - **Khắc phục triệt để lỗi đen màn hình -> văng app trên thiết bị thực tế:** Khóa an toàn `DRAW_USE_LLVM=0` ngay khi khởi tạo quy trình, chuyển luồng chạy runtime sang Thread riêng stack `8 MiB`, tự tắt Retina & cân chỉnh RAM theo trần `os_proc_available_memory()` thực tế (tránh Jetsam OOM trên máy trần 2.2–2.3 GiB), và chống khóa màn hình khi boot lần đầu.
+          - **Màn hình tiến trình khởi động trực quan (Live Boot Progress):** Hiển thị từng bước khởi chạy Linux 6.18 / phân vùng `data.img` / đồ họa Android kèm đồng hồ đếm giây và nút mở nhanh Serial Console.
+          - **Cảnh báo & Tối ưu an toàn 1 chạm:** Tự đọc `session.record` thành thông báo tiếng Việt dễ hiểu khi phiên trước bị iOS thu hồi RAM và cho phép hạ cấu hình an toàn chỉ với 1 chạm.
+          - **Hoàn thiện giao diện Apple HIG:** Sửa lệch tâm các nút hành động, hết cắt chữ thông số chip/iOS/ROM và thêm bộ 3 cấu hình nhanh (`Tiết kiệm RAM`, `Khuyên dùng`, `Hiệu năng`).
 
           ## Hướng dẫn thiết lập nhanh (Mô hình VMware)
 
           1. Cài file `.ipa` tương ứng qua TrollStore / AltStore / SideStore.
           2. Mở tab **Kho ROM** -> bấm **Tải về ngay (1 chạm)** để tải LineageOS 24 (Android 17) hoặc nhập tệp `.tar.gz` / `.tar.zst` có sẵn.
-          3. Sang tab **Máy ảo** -> bấm **+** tạo máy ảo mới, cấu hình RAM/vCPU theo mức đề xuất và khởi động.
+          3. Sang tab **Máy ảo** -> bấm **+** tạo máy ảo mới (mặc định đã tự cân chỉnh an toàn) và khởi động.
           4. Trong phiên chạy, dùng thanh công cụ nổi để **Cài APK / APKS / APKM**, mở **PiP** hoặc bật **AFK Eco Mode**.
 
           > Ghi công cốt lõi: xây dựng trên nền tảng [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) và cảm hứng từ [`ish-app/ish`](https://github.com/ish-app/ish).

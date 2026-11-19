@@ -31,6 +31,16 @@ nonisolated enum VMSessionPhase: Equatable, Sendable {
     }
 }
 
+nonisolated enum BootStage: Int, Comparable, Sendable {
+    case preparing = 0
+    case kernelBooting = 1
+    case formattingOrInit = 2
+    case startingGraphics = 3
+    case ready = 4
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
 nonisolated struct VMTelemetrySnapshot: Equatable, Sendable {
     var cpuUtilizationPercent: Double = 0
     var activeVCPUs: Int = 0
@@ -56,6 +66,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published private(set) var activeVM: VirtualMachineConfig?
     @Published private(set) var telemetry = VMTelemetrySnapshot()
     @Published private(set) var consoleText: String = ""
+    @Published private(set) var bootStage: BootStage = .preparing
+    @Published private(set) var bootStartedAt: Date = Date()
+    @Published var bootOverlayDismissed: Bool = false
+    @Published private(set) var isFirstBootSession: Bool = false
     @Published private(set) var spacePause: SpacePause?
     @Published var startSpaceShortage: StartSpace?
     @Published private(set) var afkEcoMode: Bool = false
@@ -64,6 +78,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     @Published private(set) var adbLanAddress: String?
     @Published var keyboardVisible: Bool = false
     @Published var errorBannerMessage: String?
+
+    var shouldShowBootOverlay: Bool {
+        phase.isActive && !telemetry.displayActive && bootStage != .ready && !bootOverlayDismissed
+    }
 
     let installer = ApkInstaller()
     let pipController = DynariumPiPController()
@@ -79,6 +97,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private var activeMetalView: GuestMetalView?
     private var initialGeometry: GuestDisplayGeometry?
     private var bootLaunchedForSession = false
+    private var consoleLineBuffer = ""
+    private var runtimeThread: Thread?
     private var statsTimer: Task<Void, Never>?
     private var spaceCheckTask: Task<Void, Never>?
     private var spacePauser: SpacePauser?
@@ -117,10 +137,15 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             return
         }
 
+        isFirstBootSession = isFirstBoot
         activeVM = vm
         activeImage = image
         telemetry = VMTelemetrySnapshot()
         consoleText = ""
+        consoleLineBuffer = ""
+        bootStage = .preparing
+        bootStartedAt = Date()
+        bootOverlayDismissed = false
         spacePause = nil
         afkEcoMode = false
         oledBlackoutActive = false
@@ -154,40 +179,80 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         let dataDiskPath = vmStore.dataDiskURL(for: vm.id).path
         let sessionRecordPath = vmStore.sessionRecordURL(for: vm.id).path
         let params = kernarium_runtime_loader_launch_memory_set()
+        let appBudgetMiB = params.application_mib
+        let engineBudgetMiB = params.engine_mib
+        let headroomBudgetMiB = params.headroom_mib
 
         let boundedSize = GuestInputCoordinateSpace.boundedDisplaySize(geometry.pixelSize)
-        let width = UInt32(max(1, Int(boundedSize.width)))
-        let height = UInt32(max(1, Int(boundedSize.height)))
+        let width = UInt32(max(1, Int(boundedSize.width.rounded(.down))))
+        let height = UInt32(max(1, Int(boundedSize.height.rounded(.down))))
         let dpi = max(120, geometry.dotsPerInch)
         let timeZoneName = TimeZone.current.identifier
+        let isUniversal = hardware.edition == .universalSoftware
 
-        // Select software Gallium rasterizer safely before loading/booting Mesa on Universal edition.
-        if hardware.edition == .universalSoftware {
+        // Configure Gallium software driver & disable LLVM draw JIT before selecting runtime.
+        if isUniversal {
             let driver = hardware.resolvedGalliumDriver(
                 preference: vm.softwareBackend,
                 jitActive: hardware.debuggerAttached
             )
             setenv("GALLIUM_DRIVER", driver, 1)
+            setenv("DRAW_USE_LLVM", driver == "llvmpipe" ? "1" : "0", 1)
         }
 
-        let isAutoPiP = vm.afkFrameRateLimit > 0
-        if isAutoPiP {
-            pipController.updateAutoStartFromInline(true, fps: vm.afkFrameRateLimit)
+        let selectRC = kernarium_runtime_loader_select(UInt32(KERNARIUM_RUNTIME_GUEST_ANDROID))
+        guard selectRC == 0 else {
+            runtimeDidExit(code: selectRC, message: "Không thể nạp framework runtime Android (\(selectRC)).")
+            return
         }
+
+        kernarium_runtime_loader_set_console_output_handler { [weak self] data in
+            let text = String(decoding: data, as: UTF8.self)
+            Task { @MainActor [weak self] in
+                self?.appendConsole(text)
+            }
+        }
+
+        kernarium_runtime_loader_set_restart_handler { [weak self] rawEvent, restartCount in
+            guard let event = GuestRestartEvent(event: rawEvent, restartCount: restartCount) else { return }
+            Task { @MainActor [weak self] in
+                guard let self, let currentName = self.activeVM?.name else { return }
+                switch event {
+                case .began(let count):
+                    self.bootStage = .preparing
+                    self.bootStartedAt = Date()
+                    self.bootOverlayDismissed = false
+                    self.phase = .restarting(vmName: currentName, count: count)
+                case .booted:
+                    if case .restarting = self.phase {
+                        self.phase = .running(vmName: currentName)
+                    }
+                    if self.afkEcoMode {
+                        self.applyAfkThrottling(enabled: true)
+                    }
+                }
+            }
+        }
+
+        view.setGuestDisplay(width: width, height: height)
+        UIApplication.shared.isIdleTimerDisabled = true
+
+        if case .booting(let name) = phase {
+            phase = .running(vmName: name)
+        }
+        if vm.microphoneEnabled {
+            setMicrophone(enabled: true)
+        }
+        if vm.adbOverLan {
+            setAdbOverLan(enabled: true)
+        }
+        startMonitoringLoops()
 
         let metalViewBox = UncheckedViewBox(view: view)
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-
+        // Occupies a dedicated 8 MiB stack Thread rather than Swift's 512 KiB cooperative pool.
+        let worker = Thread { [weak self] in
             let identity = try? AdbKeyStore.forVM(vm.id).loadOrCreate()
             let adbPubKey = identity?.publicKeyLine
-
-            let selectRC = kernarium_runtime_loader_select(UInt32(KERNARIUM_RUNTIME_GUEST_ANDROID))
-            guard selectRC == 0 else {
-                await self.runtimeDidExit(code: selectRC, message: "Không thể nạp framework runtime Android (\(selectRC)).")
-                return
-            }
 
             var useJitFlag: UInt32 = 0
             if vm.preferJitIfAvailable {
@@ -198,80 +263,86 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                 )
                 if jitStatus == KERNARIUM_RUNTIME_JIT_READY {
                     useJitFlag = 1
-                    setenv("GALLIUM_DRIVER", "llvmpipe", 1)
-                }
-            }
-
-            kernarium_runtime_loader_set_console_output_handler { [weak self] data in
-                let text = String(decoding: data, as: UTF8.self)
-                Task { @MainActor [weak self] in
-                    self?.appendConsole(text)
-                }
-            }
-
-            kernarium_runtime_loader_set_restart_handler { [weak self] rawEvent, restartCount in
-                guard let event = GuestRestartEvent(event: rawEvent, restartCount: restartCount) else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, let currentName = self.activeVM?.name else { return }
-                    switch event {
-                    case .began(let count):
-                        self.phase = .restarting(vmName: currentName, count: count)
-                    case .booted:
-                        if case .restarting = self.phase {
-                            self.phase = .running(vmName: currentName)
-                        }
-                        if self.afkEcoMode {
-                            self.applyAfkThrottling(enabled: true)
-                        }
+                    if isUniversal {
+                        setenv("GALLIUM_DRIVER", "llvmpipe", 1)
+                        setenv("DRAW_USE_LLVM", "1", 1)
                     }
                 }
             }
 
-            await MainActor.run {
-                if case .booting(let name) = self.phase {
-                    self.phase = .running(vmName: name)
-                }
-                if vm.microphoneEnabled {
-                    self.setMicrophone(enabled: true)
-                }
-                if vm.adbOverLan {
-                    self.setAdbOverLan(enabled: true)
-                }
-                self.startMonitoringLoops()
-            }
+            let exitCode = Self.executeGuestRuntime(
+                view: metalViewBox.view,
+                releasePath: releasePath,
+                dataDiskPath: dataDiskPath,
+                sessionRecordPath: sessionRecordPath,
+                adbPubKey: adbPubKey,
+                timeZoneName: timeZoneName,
+                width: width,
+                height: height,
+                dpi: dpi,
+                vm: vm,
+                appBudgetMiB: appBudgetMiB,
+                engineBudgetMiB: engineBudgetMiB,
+                headroomBudgetMiB: headroomBudgetMiB,
+                useJitFlag: useJitFlag
+            )
 
-            let exitCode: Int32 = Self.withOptionalCString(adbPubKey) { adbPtr in
-                releasePath.withCString { releasePtr in
-                    dataDiskPath.withCString { dataPtr in
-                        sessionRecordPath.withCString { recPtr in
-                            timeZoneName.withCString { tzPtr in
-                                var boot = kernarium_runtime_boot()
-                                boot.struct_size = UInt32(MemoryLayout<kernarium_runtime_boot>.size)
-                                boot.width = width
-                                boot.height = height
-                                boot.dots_per_inch = dpi
-                                boot.guest_memory_mib = UInt32(vm.guestMemoryMiB)
-                                boot.guest_processor_count = UInt32(vm.vcpuCount)
-                                boot.android_boot_mode = vm.bootMode.runtimeValue
-                                boot.auto_resize_guest = vm.autoResizeDisplay ? 1 : 0
-                                boot.android_data_disk_path = dataPtr
-                                boot.android_release_path = releasePtr
-                                boot.android_data_gib = UInt32(vm.dataDiskGiB)
-                                boot.gpu_budget_application_mib = params.application_mib
-                                boot.gpu_budget_engine_mib = params.engine_mib
-                                boot.gpu_budget_headroom_mib = params.headroom_mib
-                                boot.android_adb_public_key = adbPtr
-                                boot.android_time_zone = tzPtr
-                                boot.session_record_path = recPtr
-                                boot.use_jit = useJitFlag
-                                return kernarium_runtime_loader_run(metalViewBox.view, &boot)
-                            }
+            Task { @MainActor [weak self] in
+                self?.runtimeDidExit(code: exitCode, message: nil)
+            }
+        }
+        worker.name = "dynarium-runtime"
+        worker.qualityOfService = .userInitiated
+        worker.stackSize = 8 * 1024 * 1024
+        runtimeThread = worker
+        worker.start()
+    }
+
+    nonisolated private static func executeGuestRuntime(
+        view: GuestMetalView,
+        releasePath: String,
+        dataDiskPath: String,
+        sessionRecordPath: String,
+        adbPubKey: String?,
+        timeZoneName: String,
+        width: UInt32,
+        height: UInt32,
+        dpi: UInt32,
+        vm: VirtualMachineConfig,
+        appBudgetMiB: UInt32,
+        engineBudgetMiB: UInt32,
+        headroomBudgetMiB: UInt32,
+        useJitFlag: UInt32
+    ) -> Int32 {
+        withOptionalCString(adbPubKey) { adbPtr in
+            releasePath.withCString { releasePtr in
+                dataDiskPath.withCString { dataPtr in
+                    sessionRecordPath.withCString { recPtr in
+                        timeZoneName.withCString { tzPtr in
+                            var boot = kernarium_runtime_boot()
+                            boot.struct_size = UInt32(MemoryLayout<kernarium_runtime_boot>.size)
+                            boot.width = width
+                            boot.height = height
+                            boot.dots_per_inch = dpi
+                            boot.guest_memory_mib = UInt32(vm.guestMemoryMiB)
+                            boot.guest_processor_count = UInt32(vm.vcpuCount)
+                            boot.android_boot_mode = vm.bootMode.runtimeValue
+                            boot.auto_resize_guest = vm.autoResizeDisplay ? 1 : 0
+                            boot.android_data_disk_path = dataPtr
+                            boot.android_release_path = releasePtr
+                            boot.android_data_gib = UInt32(vm.dataDiskGiB)
+                            boot.gpu_budget_application_mib = appBudgetMiB
+                            boot.gpu_budget_engine_mib = engineBudgetMiB
+                            boot.gpu_budget_headroom_mib = headroomBudgetMiB
+                            boot.android_adb_public_key = adbPtr
+                            boot.android_time_zone = tzPtr
+                            boot.session_record_path = recPtr
+                            boot.use_jit = useJitFlag
+                            return kernarium_runtime_loader_run(view, &boot)
                         }
                     }
                 }
             }
-
-            await self.runtimeDidExit(code: exitCode, message: nil)
         }
     }
 
@@ -283,6 +354,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     }
 
     private func runtimeDidExit(code: Int32, message: String?) {
+        runtimeThread = nil
+        UIApplication.shared.isIdleTimerDisabled = false
         stopMonitoringLoops()
         setAdbOverLan(enabled: false)
         pipController.stop()
@@ -557,6 +630,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         prevPresentedFrames = stats.presented_frames
         prevBootIndex = stats.boot_index
         telemetry = next
+
+        if next.displayActive && bootStage < .startingGraphics {
+            bootStage = .startingGraphics
+        }
     }
 
     private func triggerLowSpacePause(freeBytes: UInt64) async {
@@ -626,6 +703,35 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         if consoleText.utf8.count > consoleLimitBytes {
             let trimStart = consoleText.index(consoleText.endIndex, offsetBy: -48_000, limitedBy: consoleText.startIndex) ?? consoleText.startIndex
             consoleText = String(consoleText[trimStart...])
+        }
+
+        guard bootStage < .ready else { return }
+        consoleLineBuffer.append(text)
+        while let newlineIdx = consoleLineBuffer.firstIndex(where: { $0 == "\n" || $0 == "\r" }) {
+            let line = String(consoleLineBuffer[..<newlineIdx])
+            consoleLineBuffer.removeSubrange(...newlineIdx)
+            scanBootMilestone(in: line)
+        }
+        if consoleLineBuffer.utf8.count > 4096 {
+            consoleLineBuffer.removeAll(keepingCapacity: true)
+        } else if !consoleLineBuffer.isEmpty {
+            scanBootMilestone(in: consoleLineBuffer)
+        }
+    }
+
+    private func scanBootMilestone(in line: String) {
+        var detected: BootStage?
+        if line.contains("processing action (sys.boot_completed=1)") || line.contains("starting service 'recovery'") {
+            detected = .ready
+        } else if line.contains("starting service 'surfaceflinger'") || line.contains("Virgl ") {
+            detected = .startingGraphics
+        } else if line.contains("init: init first stage started!") || line.contains("make_f2fs") || line.contains("Formatting ") || line.contains("EXT4-fs") {
+            detected = .formattingOrInit
+        } else if line.contains("Linux version ") {
+            detected = .kernelBooting
+        }
+        if let detected, detected > bootStage {
+            bootStage = detected
         }
     }
 }

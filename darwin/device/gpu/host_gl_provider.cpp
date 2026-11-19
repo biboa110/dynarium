@@ -193,6 +193,17 @@ void* HostGlProvider::display() noexcept
             std::string_view(driverOverride) != kDriverOverride) {
             ::setenv(kDriverOverrideVariable, kDriverOverride, 1);
         }
+#if UML_GPU_SOFTWARE_RENDERER
+        // When the caller selects Mesa softpipe on a non-JIT Darwin host,
+        // Gallium's draw module must also stay off LLVM so vertex shading
+        // never attempts unsigned PROT_EXEC JIT emission.
+        if (const char* galliumDriver = std::getenv("GALLIUM_DRIVER");
+            galliumDriver != nullptr &&
+            std::string_view(galliumDriver) == "softpipe" &&
+            std::getenv("DRAW_USE_LLVM") == nullptr) {
+            ::setenv("DRAW_USE_LLVM", "0", 0);
+        }
+#endif
         const EGLDeviceEXT device = softwareDevice();
         if (device == EGL_NO_DEVICE_EXT)
             return nullptr;

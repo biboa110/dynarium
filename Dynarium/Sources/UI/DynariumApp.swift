@@ -17,6 +17,7 @@ struct DynariumApp: App {
         // Must configure Mesa & prune bloated Metal shader caches before any Metal/GPU initialization.
         MetalShaderCache.removeIfBloatedBeforeFirstUse()
         MesaShaderCache.configureBeforeFirstUse()
+        HostHardwareProfile.configureProcessEnvironmentBeforeFirstUse()
     }
 
     var body: some Scene {

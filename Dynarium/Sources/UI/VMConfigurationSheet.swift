@@ -43,6 +43,32 @@ struct VMConfigurationSheet: View {
                 let gpuEval = hardware.evaluateGpuBudget(memoryMiB: config.guestMemoryMiB, vcpus: config.vcpuCount)
 
                 Section {
+                    HStack(spacing: 8) {
+                        PresetPillButton(title: "Tiết kiệm RAM", icon: "leaf") {
+                            let targetVCPUs = min(2, hardware.maxVCPUs)
+                            let safeRAM = hardware.safeRecommendedMemoryMiB(for: targetVCPUs)
+                            let maxAllowed = max(minRAM, hardware.maximumMemoryMiB(vcpus: targetVCPUs))
+                            config.vcpuCount = targetVCPUs
+                            config.guestMemoryMiB = min(max(min(safeRAM, 896), minRAM), maxAllowed)
+                            config.retinaDisplay = false
+                        }
+                        PresetPillButton(title: "Khuyên dùng", icon: "checkmark.shield") {
+                            let targetVCPUs = hardware.defaultVCPUs()
+                            config.vcpuCount = targetVCPUs
+                            config.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: targetVCPUs)
+                            config.retinaDisplay = hardware.defaultRetinaDisplay()
+                        }
+                        PresetPillButton(title: "Hiệu năng", icon: "speedometer") {
+                            let targetVCPUs = min(max(2, hardware.maxVCPUs / 2), hardware.maxVCPUs)
+                            let maxAllowed = max(minRAM, hardware.maximumMemoryMiB(vcpus: targetVCPUs))
+                            let perfRAM = min(max(hardware.conservativeMemoryMiB(vcpus: targetVCPUs), hardware.safeRecommendedMemoryMiB(for: targetVCPUs)), maxAllowed)
+                            config.vcpuCount = targetVCPUs
+                            config.guestMemoryMiB = perfRAM
+                            config.retinaDisplay = (hardware.edition == .metal4Vulkan)
+                        }
+                    }
+                    .padding(.vertical, 2)
+
                     Stepper(value: $config.vcpuCount, in: 1...max(1, hardware.maxVCPUs)) {
                         LabeledContent("Số nhân CPU (vCPU)") {
                             Text("\(config.vcpuCount) / \(hardware.maxVCPUs)")
@@ -117,6 +143,11 @@ struct VMConfigurationSheet: View {
                     }
 
                     Toggle("Màn hình Retina sắc nét", isOn: $config.retinaDisplay)
+                    if config.retinaDisplay && hardware.edition == .universalSoftware {
+                        Text("Lưu ý: Dựng hình CPU trên bản Universal ở chế độ Retina tốn gấp 9 lần điểm ảnh và RAM, dễ gây chậm hoặc bị iOS đóng tiến trình.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     Toggle("Tự khớp kích thước màn hình", isOn: $config.autoResizeDisplay)
 
                     if hardware.edition == .universalSoftware {
@@ -165,5 +196,30 @@ struct VMConfigurationSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct PresetPillButton: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(Color.accentColor)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .padding(.horizontal, 6)
+            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 }

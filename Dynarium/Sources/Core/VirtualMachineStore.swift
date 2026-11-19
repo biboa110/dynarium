@@ -60,6 +60,13 @@ nonisolated enum VMStoreError: LocalizedError, Sendable {
     }
 }
 
+nonisolated struct VMSessionDiagnostic: Equatable, Sendable {
+    let title: String
+    let message: String
+    let suggestsSafeTune: Bool
+    let isCrashOrJetsam: Bool
+}
+
 @MainActor
 final class VirtualMachineStore: ObservableObject {
     static let shared = VirtualMachineStore()
@@ -131,7 +138,7 @@ final class VirtualMachineStore: ObservableObject {
 
     func makeDefaultConfig(name: String, systemImageID: UUID, hardware: HostHardwareProfile) -> VirtualMachineConfig {
         let vcpus = hardware.defaultVCPUs()
-        let ram = hardware.recommendedMemoryMiB(for: vcpus)
+        let ram = hardware.safeRecommendedMemoryMiB(for: vcpus)
         return VirtualMachineConfig(
             id: UUID(),
             name: name,
@@ -139,7 +146,7 @@ final class VirtualMachineStore: ObservableObject {
             guestMemoryMiB: ram,
             vcpuCount: vcpus,
             dataDiskGiB: 16,
-            retinaDisplay: true,
+            retinaDisplay: hardware.defaultRetinaDisplay(),
             autoResizeDisplay: true,
             bootMode: .auto,
             microphoneEnabled: false,
@@ -151,6 +158,26 @@ final class VirtualMachineStore: ObservableObject {
             createdAt: Date(),
             lastRunAt: nil
         )
+    }
+
+    @discardableResult
+    func applySafeProfile(for id: UUID, hardware: HostHardwareProfile) -> VirtualMachineConfig? {
+        guard var cfg = machines.first(where: { $0.id == id }) else { return nil }
+        let safeVCPUs = hardware.defaultVCPUs()
+        cfg.vcpuCount = safeVCPUs
+        cfg.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: safeVCPUs)
+        cfg.retinaDisplay = hardware.defaultRetinaDisplay()
+        cfg.softwareBackend = .auto
+        cfg.preferJitIfAvailable = hardware.debuggerAttached
+        save(cfg)
+        try? FileManager.default.removeItem(at: sessionRecordURL(for: id))
+        objectWillChange.send()
+        return cfg
+    }
+
+    func clearSessionRecord(for id: UUID) {
+        try? FileManager.default.removeItem(at: sessionRecordURL(for: id))
+        objectWillChange.send()
     }
 
     func save(_ config: VirtualMachineConfig) {
@@ -230,21 +257,127 @@ final class VirtualMachineStore: ObservableObject {
         machines.filter { $0.systemImageID == imageID }.count
     }
 
-    func lastSessionSummary(for id: UUID) -> String? {
+    func lastSessionDiagnostic(for id: UUID) -> VMSessionDiagnostic? {
         let url = sessionRecordURL(for: id)
-        guard let data = try? Data(contentsOf: url), data.count > 4096 else {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
             return nil
         }
-        // Session summary follows the 4096-byte memory checkpoint slot (session_record.hpp).
-        let text = String(decoding: data.dropFirst(4096), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        if text == "running" {
-            return "Phiên trước bị đóng đột ngột (hoặc hệ thống thu hồi RAM)."
+
+        let raw = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\0", with: "")
+        let headerSection = raw.components(separatedBy: "\nkernel-output\n").first ?? raw
+        let lines = headerSection
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        var fields: [String: String] = [:]
+        for line in lines {
+            if let space = line.firstIndex(of: " ") {
+                let key = String(line[..<space])
+                let value = String(line[line.index(after: space)...]).trimmingCharacters(in: .whitespaces)
+                if key == "memory" || key == "state" || key == "end" || key == "status" || key == "message" {
+                    fields[key] = value
+                }
+            } else if line == "running" || line == "powered_off" || line == "powered-off" {
+                fields["state"] = line
+                fields["end"] = line
+            }
         }
-        if text == "powered_off" {
+
+        var peakBytes: UInt64?
+        var availableBytes: UInt64?
+        if let memoryLine = fields["memory"] {
+            let words = memoryLine.split(separator: " ")
+            var values: [String: UInt64] = [:]
+            var idx = 0
+            while idx + 1 < words.count {
+                if let val = UInt64(words[idx + 1]) {
+                    values[String(words[idx])] = val
+                }
+                idx += 2
+            }
+            peakBytes = values["peak"] ?? values["footprint"]
+            availableBytes = values["available"]
+        }
+
+        let state = fields["state"] ?? ""
+        let end = fields["end"] ?? state
+        let message = fields["message"]
+        let status = fields["status"]
+        let detail = (message?.isEmpty == false) ? ": \(message!)" : ""
+
+        if state != "running" && ["powered-off", "powered_off", "restarted", "stopped"].contains(end) {
             return nil
         }
-        return text
+
+        if state == "running" || end == "running" {
+            let peakText = peakBytes.map { " (đỉnh \(Formats.size(bytes: $0)))" } ?? ""
+            if let avail = availableBytes, avail < (320 << 20) {
+                return VMSessionDiagnostic(
+                    title: "iOS đã đóng máy ảo (chạm trần RAM)",
+                    message: "Phiên trước bị iOS thu hồi bộ nhớ\(peakText), chỉ còn \(Formats.size(bytes: avail)) trước trần. Hãy bấm Tối ưu an toàn.",
+                    suggestsSafeTune: true,
+                    isCrashOrJetsam: true
+                )
+            }
+            return VMSessionDiagnostic(
+                title: "Phiên trước bị đóng đột ngột",
+                message: "Máy ảo dừng bất thường khi đang khởi chạy\(peakText). Hãy dùng Tối ưu an toàn để giữ RAM và CPU ổn định.",
+                suggestsSafeTune: true,
+                isCrashOrJetsam: true
+            )
+        }
+
+        switch end {
+        case "guest-panic":
+            return VMSessionDiagnostic(
+                title: "Nhân Linux Android gặp lỗi",
+                message: "Hệ điều hành khách dừng với kernel panic\(detail).",
+                suggestsSafeTune: false,
+                isCrashOrJetsam: true
+            )
+        case "kernel-abort":
+            return VMSessionDiagnostic(
+                title: "Nhân Linux dừng bất thường",
+                message: "Nhân máy ảo gặp sự cố trong lúc chạy\(detail).",
+                suggestsSafeTune: true,
+                isCrashOrJetsam: true
+            )
+        case "kernel-exit":
+            let codeText = status.map { " (mã \($0))" } ?? ""
+            return VMSessionDiagnostic(
+                title: "Android dừng ngoài ý muốn",
+                message: "Nhân hệ điều hành khách đã thoát\(codeText)\(detail).",
+                suggestsSafeTune: false,
+                isCrashOrJetsam: true
+            )
+        case "hibernation-restore-failed":
+            return VMSessionDiagnostic(
+                title: "Cần khởi động lại từ đầu",
+                message: "Không thể khôi phục bộ nhớ ngủ đông của phiên trước; lần bật tới sẽ khởi động mới.",
+                suggestsSafeTune: false,
+                isCrashOrJetsam: false
+            )
+        case "host-fault", "process-exit":
+            return VMSessionDiagnostic(
+                title: "Ứng dụng dừng khi máy ảo đang chạy",
+                message: "Tiến trình Dynarium gặp sự cố đột ngột\(detail). Khuyên dùng Tối ưu an toàn trước khi chạy lại.",
+                suggestsSafeTune: true,
+                isCrashOrJetsam: true
+            )
+        case "":
+            return nil
+        default:
+            return VMSessionDiagnostic(
+                title: "Phiên trước kết thúc bất thường",
+                message: "Máy ảo chưa tắt hoàn chỉnh\(detail). Nên kiểm tra lại cấu hình trước khi khởi chạy.",
+                suggestsSafeTune: true,
+                isCrashOrJetsam: false
+            )
+        }
+    }
+
+    func lastSessionSummary(for id: UUID) -> String? {
+        lastSessionDiagnostic(for: id)?.message
     }
 }

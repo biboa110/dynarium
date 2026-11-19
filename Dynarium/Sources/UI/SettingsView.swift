@@ -15,7 +15,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Phiên bản & Phần cứng") {
+                Section {
                     LabeledContent("Phiên bản Dynarium") {
                         Text("v\(hardware.appVersionString) (\(hardware.buildNumberString))")
                             .monospacedDigit()
@@ -26,13 +26,29 @@ struct SettingsView: View {
                     }
                     LabeledContent("Thiết bị / Hệ điều hành") {
                         Text("\(hardware.chipGenerationLabel) • iOS \(hardware.osVersionString)")
+                            .multilineTextAlignment(.trailing)
                     }
                     LabeledContent("GPU hệ thống") {
                         Text(hardware.metalDeviceName)
                     }
+                    LabeledContent("RAM vật lý / Trần iOS") {
+                        let ceiling = hardware.availableProcessMemoryBytes > 0
+                            ? Formats.size(bytes: hardware.availableProcessMemoryBytes)
+                            : "Không giới hạn"
+                        Text("\(Formats.size(bytes: hardware.physicalMemoryBytes)) / \(ceiling)")
+                            .monospacedDigit()
+                    }
                     LabeledContent("Trạng thái JIT / Debugger") {
                         Text(hardware.debuggerAttached ? "Đang gắn (JIT khả dụng)" : "Không gắn (An toàn non-JIT)")
                             .foregroundStyle(hardware.debuggerAttached ? .green : .secondary)
+                    }
+                } header: {
+                    Text("Phiên bản & Phần cứng")
+                } footer: {
+                    if hardware.isMemoryEntitlementLimited {
+                        Text("iOS đang giới hạn trần RAM tiến trình dưới 2.5 GiB (thường gặp khi cài qua chứng chỉ miễn phí chưa giữ quyền mở rộng RAM hoặc trên máy 4 GiB). Dynarium tự động hạ mức RAM/Retina an toàn để tránh bị hệ thống đóng đột ngột.")
+                    } else if hardware.recommendsMetal4Edition {
+                        Text("Thiết bị của bạn hỗ trợ iOS \(hardware.osMajorVersion) và chip Apple GPU thế hệ mới — khuyên dùng gói Dynarium Metal4-iOS26.ipa để tăng tốc đồ họa Vulkan 1.4.")
                     }
                 }
 
@@ -77,6 +93,9 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Cài đặt")
+            .onAppear {
+                hardware.refreshDynamicMetrics()
+            }
             .alert("Đã dọn Shader Cache", isPresented: $cacheClearedAlert) {
                 Button("Xong", role: .cancel) {}
             } message: {

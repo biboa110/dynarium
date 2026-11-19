@@ -223,7 +223,7 @@ private struct CatalogRowView: View {
     let onDownload: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -235,15 +235,32 @@ private struct CatalogRowView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title)
-                        .font(.headline)
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(item.title)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        if alreadyInstalled {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                Text("Đã cài")
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.green.opacity(0.14), in: Capsule())
+                            .fixedSize()
+                        }
+                    }
                     Text(item.subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Text(item.kernelVersion)
                 Text("•")
                 Text(item.pageProfile)
@@ -254,15 +271,13 @@ private struct CatalogRowView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Button(action: onDownload) {
-                Label(
-                    alreadyInstalled ? "Tải thêm bản sao" : "Tải về ngay (1 chạm)",
-                    systemImage: "square.and.arrow.down"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(disabled)
+            CenteredActionButton(
+                title: alreadyInstalled ? "Tải thêm bản sao" : "Tải về ngay (1 chạm)",
+                systemImage: "square.and.arrow.down",
+                tone: alreadyInstalled ? .tinted : .prominent,
+                disabled: disabled,
+                action: onDownload
+            )
             .padding(.top, 2)
         }
         .padding(.vertical, 4)
