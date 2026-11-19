@@ -31,7 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <set>
 #include <sstream>
 #include <string>
@@ -180,7 +180,7 @@ private:
 			(instruction.info().traits & decode::trait::fp_state) != 0U;
 		const auto output = ::uml::cpu::arm64::gadgets::a32::build(
 			{.key = key, .code = code, .single = true}, {},
-			std::pmr::get_default_resource(), {},
+			::uml::cpu::pmr::get_default_resource(), {},
 			::uml::cpu::arm64::gadgets::BuildOptions{}, profile_,
 			budget);
 		if (output.result.program.accesses_fp_state() != trait) {

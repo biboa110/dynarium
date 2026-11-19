@@ -10,7 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <string_view>
 #include <utility>
 
@@ -111,7 +111,7 @@ const std::array<std::uintptr_t, 16> dsb_gadgets{
 {
 	const std::array code{instruction, terminal_system_call};
 	return gadgets::Builder{}.build(engine_test_code_base, code, {},
-		std::pmr::get_default_resource());
+		::uml::cpu::pmr::get_default_resource());
 }
 
 [[nodiscard]] unsigned runtime_instruction_count(std::uintptr_t entry)
@@ -194,7 +194,7 @@ void isb_synchronizes_with_code_changes()
 		terminal_system_call,
 	};
 	const auto built = gadgets::Builder{}.build(engine_test_code_base, code,
-		{}, std::pmr::get_default_resource());
+		{}, ::uml::cpu::pmr::get_default_resource());
 	require(built.complete, "ISB block did not translate");
 	std::uint64_t sequence = 7;
 	const auto run = [&](const std::uint64_t *published, std::uint64_t seen,

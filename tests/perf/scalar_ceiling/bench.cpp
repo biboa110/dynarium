@@ -86,7 +86,7 @@ struct Workload final {
 					if (target == pc) return &loop;
 					require(target == pc + 72, "unexpected branch target");
 					return &end;
-				}, std::pmr::get_default_resource(), {}, {.scalar_forwarding = forwarding});
+				}, ::uml::cpu::pmr::get_default_resource(), {}, {.scalar_forwarding = forwarding});
 			require(result.complete && result.program.instruction_count() == 18, "incomplete translation");
 			variants[forwarding].emplace(std::move(result.program));
 		}

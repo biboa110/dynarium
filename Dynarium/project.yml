@@ -78,14 +78,17 @@ targets:
       - package: GuestHostCore
       - framework: ../.build/kernarium-xcframeworks/KRuntime_Android_6_18_4K.xcframework
         embed: true
+        link: false
         codeSign: true
         removeHeaders: true
       - framework: ../.build/kernarium-xcframeworks/MesaEGL.xcframework
         embed: true
+        link: false
         codeSign: true
         removeHeaders: true
       - framework: ../.build/kernarium-xcframeworks/MesaGallium.xcframework
         embed: true
+        link: false
         codeSign: true
         removeHeaders: true
       - framework: ../.build/kernarium-xcframeworks/LibZstd.xcframework

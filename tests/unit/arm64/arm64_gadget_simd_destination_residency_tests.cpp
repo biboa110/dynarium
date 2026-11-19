@@ -10,7 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <span>
 
 namespace arm64_simd_three_same_test {
@@ -466,7 +466,7 @@ void exact_run_shape()
 		mla(0), mla(0), mla(0), mla(0),
 	};
 	const auto built = gadgets::Builder{}.build(
-		base, run, {}, std::pmr::get_default_resource());
+		base, run, {}, ::uml::cpu::pmr::get_default_resource());
 	const auto words = built.program.words();
 	require(built.complete);
 	require(built.program.instruction_count() == run.size());
@@ -499,7 +499,7 @@ void unsafe_or_short_runs_use_ordinary_gadgets()
 		std::span<const std::uint32_t>{outside_bank},
 	}) {
 		const auto built = gadgets::Builder{}.build(
-			base, instructions, {}, std::pmr::get_default_resource());
+			base, instructions, {}, ::uml::cpu::pmr::get_default_resource());
 		require(built.complete);
 		require(built.program.words().front() == address(
 			selection::uml_arm64_gadget_simd_three_same_mla_4s));
@@ -515,7 +515,7 @@ void dirty_destination_is_flushed_before_linking()
 	const gadgets::BlockLink target{};
 	const auto built = gadgets::Builder{}.build(base, run,
 		[&](std::uint64_t) { return &target; },
-		std::pmr::get_default_resource());
+		::uml::cpu::pmr::get_default_resource());
 	const auto words = built.program.words();
 	require(words[10] == address(
 		selection::uml_arm64_gadget_simd_destination_resident_flush));

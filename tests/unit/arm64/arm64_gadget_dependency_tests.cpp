@@ -90,7 +90,7 @@ void scalar_matrix()
 				};
 				const auto enabled = g::Builder{}.build(pc, instructions);
 				const auto disabled = g::Builder{}.build(pc, instructions, {},
-					std::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
+					::uml::cpu::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
 				require(enabled.complete && disabled.complete);
 				require(enabled.program.words().size() == disabled.program.words().size());
 				if (mask != 0)
@@ -153,7 +153,7 @@ g::ScalarAccess access_for(std::uint32_t instruction)
 {
 	const std::array code{instruction};
 	const auto built = g::Builder{}.build(0x4000, code, {},
-		std::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
+		::uml::cpu::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
 	for (std::size_t count = 1; count <= 4 && count <= built.program.words().size(); ++count) {
 		const auto access = g::scalar_access(built.program.words().first(count));
 		if (access.contract) return access;
@@ -278,7 +278,7 @@ void broad_matrix()
 				};
 				const auto on = g::Builder{}.build(0x4000, code);
 				const auto off = g::Builder{}.build(0x4000, code, {},
-					std::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
+					::uml::cpu::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
 				for (unsigned trial = 0; trial < 4; ++trial) {
 					a::CpuState expected{};
 					for (auto &value : expected.registers) value = random_word(seed);

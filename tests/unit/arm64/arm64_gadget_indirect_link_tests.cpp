@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <utility>
 
 namespace arm64 = uml::cpu::arm64;
@@ -80,7 +80,7 @@ gadgets::BuildResult build_cached(std::uint64_t pc,
 	return gadgets::Builder{}.build(
 		pc, instructions,
 		[](std::uint64_t target) { return unlinked(target); },
-		std::pmr::get_default_resource(),
+		::uml::cpu::pmr::get_default_resource(),
 		[&](std::uint64_t source_pc) {
 			require(source_pc == pc);
 			return &site;
@@ -272,7 +272,7 @@ int main()
 		const std::array return_code{return_register(30)};
 		auto callee_program = gadgets::Builder{}.build(
 			callee_pc, return_code, {},
-			std::pmr::get_default_resource(),
+			::uml::cpu::pmr::get_default_resource(),
 			[&](std::uint64_t) { return &return_site; });
 		callee.resolve(callee_program);
 		require(callee_program.program.words()[0] ==
@@ -285,7 +285,7 @@ int main()
 		auto call = gadgets::Builder{}.build(
 			source_pc, call_code,
 			[&](std::uint64_t) { return &resume.link; },
-			std::pmr::get_default_resource(),
+			::uml::cpu::pmr::get_default_resource(),
 			[&](std::uint64_t) { return &call_site; });
 		arm64::CpuState cpu{};
 		cpu.registers[9] = callee_pc;

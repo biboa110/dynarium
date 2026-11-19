@@ -63,7 +63,7 @@ a::CpuState run(std::vector<std::uint32_t> code, const a::CpuState &initial,
 	a::CpuState result[2]{initial, initial};
 	for (unsigned forwarding = 0; forwarding < 2; ++forwarding) {
 		const auto built = g::Builder{}.build(pc, code, {},
-			std::pmr::get_default_resource(), {},
+			::uml::cpu::pmr::get_default_resource(), {},
 			{.scalar_forwarding = forwarding != 0});
 		require(built.complete);
 		std::size_t executed{};

@@ -11,7 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <set>
 #include <string_view>
 
@@ -112,7 +112,7 @@ using uml::emulator::tests::address;
 	gadgets::BuildOptions options{};
 	options.force_software_checksum = force_software;
 	return gadgets::Builder{}.build(base, std::array{instruction, svc},
-		{}, std::pmr::get_default_resource(), {}, options);
+		{}, ::uml::cpu::pmr::get_default_resource(), {}, options);
 }
 
 void exact_translation_selection_and_stream_shape(bool force_software)

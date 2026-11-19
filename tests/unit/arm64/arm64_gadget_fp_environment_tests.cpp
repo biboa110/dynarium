@@ -6,7 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 
 namespace arm64 = uml::cpu::arm64;
 namespace gadgets = arm64::gadgets;
@@ -62,7 +62,7 @@ arm64::CpuState run_after_inexact(const ::uml::cpu::HostCapabilities &host,
 		0xd400'0001U, // svc #0
 	};
 	const auto built = gadgets::Builder{}.build(0x8000, instructions, {},
-		std::pmr::get_default_resource(), {},
+		::uml::cpu::pmr::get_default_resource(), {},
 		gadgets::BuildOptions{.host_capabilities = host});
 	require(built.complete);
 	set_single(cpu, 0, 0x3f80'0000U);
@@ -222,7 +222,7 @@ int main()
 			0xd400'0001U, // svc #0
 		};
 		const auto built = gadgets::Builder{}.build(0x8000, convert, {},
-			std::pmr::get_default_resource(), {},
+			::uml::cpu::pmr::get_default_resource(), {},
 			gadgets::BuildOptions{.host_capabilities =
 				::uml::platform::apple::probed_host_capabilities()});
 		require(built.complete);

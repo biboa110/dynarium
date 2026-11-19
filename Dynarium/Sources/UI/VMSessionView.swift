@@ -41,6 +41,7 @@ struct VMSessionView: View {
                 GuestDisplayView(
                     keyboardVisible: $session.keyboardVisible,
                     retinaMode: vm.retinaDisplay,
+                    targetDisplayFPS: min(max(vm.targetDisplayFPS, 60), hardware.maxDisplayRefreshRate),
                     touchDidBegin: {
                         if session.telemetry.displayActive && !hudCollapsed {
                             withAnimation(.easeOut(duration: 0.2)) {
@@ -356,14 +357,16 @@ private struct BootProgressOverlay: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .center, spacing: 10) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 9, height: 9)
+                    Image("BrandMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Đang khởi động \(vmName)")
                             .font(.headline)
                             .lineLimit(1)
-                        Text(isFirstBoot ? "Thiết lập lần đầu — vui lòng chờ" : "Đang nạp hệ thống Android 17")
+                        Text(isFirstBoot ? "Dynarium • Thiết lập lần đầu" : "Dynarium • Android 17")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -586,7 +589,8 @@ private struct SessionStatsSheet: View {
                             .monospacedDigit()
                     }
                     LabeledContent("Tốc độ khung hình") {
-                        Text(String(format: "%.1f FPS", telemetry.fps))
+                        let targetHz = vm.map { min(max($0.targetDisplayFPS, 60), hardware.maxDisplayRefreshRate) } ?? 60
+                        Text(String(format: "%.1f / %d FPS (%d Hz)", telemetry.fps, targetHz, targetHz))
                             .monospacedDigit()
                     }
                     LabeledContent("RAM cấp / đang giữ") {

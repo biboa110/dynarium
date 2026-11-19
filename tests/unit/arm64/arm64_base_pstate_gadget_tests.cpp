@@ -12,7 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <string_view>
 
 namespace uml::emulator::tests::base_pstate {
@@ -305,7 +305,7 @@ using uml::emulator::tests::address;
 {
 	const std::array code{instruction, terminal_system_call};
 	return gadgets::Builder{}.build(engine_test_code_base, code, {},
-		std::pmr::get_default_resource());
+		::uml::cpu::pmr::get_default_resource());
 }
 
 [[nodiscard]] unsigned runtime_instruction_count(Gadget gadget)

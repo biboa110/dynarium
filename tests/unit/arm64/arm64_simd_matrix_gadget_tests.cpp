@@ -137,7 +137,7 @@ void translation_resolves_host_choice_and_register_offsets()
 			};
 			const auto built = gadgets::Builder{}.build(base,
 				std::array{test::instruction(mode, registers)},
-				{}, std::pmr::get_default_resource(), {}, options);
+				{}, ::uml::cpu::pmr::get_default_resource(), {}, options);
 			const auto words = built.program.words();
 			test::require(built.complete && words.size() == 4U,
 				"matrix stream has an unexpected shape");

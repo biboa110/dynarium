@@ -402,10 +402,10 @@ jobs:
 
           ## Điểm mới trong `{tag}`
 
-          - **Tối ưu độ mượt & giảm giật lag trên Metal 4 (`v1.2.1`):** Gỡ bỏ ép hạ lõi tiết kiệm `DARWIN_BG` khi iOS mới ở mức nhiệt `.serious` (chỉ tự siết khẩn cấp ở mức `.critical`), ngừng tỉa page-cache liên tục khi chạy foreground trên Metal 4, gỡ bỏ cắt GPU idle `400 ms` gây biên dịch lại shader, và nâng giới hạn Gadget Cache cho Metal 4 từ `64 MiB` lên `96 MiB`.
-          - **Hỗ trợ & Tự nhận diện JIT trên cả Metal 4 lẫn Universal:** Mặc định bật `Ưu tiên JIT` (an toàn tuyệt đối khi chưa gắn JIT nhờ kiểm tra `NO_DEBUGGER`, tự động kích hoạt tăng tốc & giảm nhiệt mạnh khi chạy cùng StikJIT / SideStore / Xcode) kèm hiển thị trạng thái **Động cơ CPU** trong bảng Thông số.
-          - **Bảng tiến trình khởi động thông minh hơn:** Giữ bảng theo dõi qua bước nháy dấu `_` (`fbcon`) cho tới khi SurfaceFlinger bắt đầu dựng hình thực tế.
-          - **Nền tảng ổn định từ `v1.2.0`:** Tự siết RAM/cache chống Jetsam trên thiết bị trần bộ nhớ hẹp (`<= 2.8 GiB`), Chế độ Mát máy thủ công, và Kho ROM đa phiên bản chính thức + Custom ROM.
+          - **Sửa triệt để lỗi crash ngay khi mở app trên iOS 16.x (Esign & TrollStore):** Loại bỏ toàn bộ ký hiệu `std::pmr` (vốn chỉ có từ iOS 17 trong `libc++.1.dylib`) bằng `uml::cpu::pmr` nội tuyến, bật `-Wunguarded-availability-new`, đặt `link: false` cho các framework nạp động, và bổ sung bước kiểm tra `check-ios16-abi.py` lúc đóng gói `.ipa`.
+          - **Đồng bộ thương hiệu Dynarium bên trong Android:** Đổi EDID màn hình, `serialno=dynarium17`, logo chờ boot, bỏ màn hình chào *Andarium Setup Wizard*, và tự cập nhật tên thiết bị `Dynarium` qua VSOCK ADB.
+          - **Mở khóa tần số quét ProMotion 60–120 Hz cho màn hình chính:** Tích hợp `CADisableMinimumFrameDurationOnPhone`, cấp `UML_DISPLAY_REFRESH_HZ` vào EDID Virtio-GPU (60 / 90 / 120 Hz) và `MTKView.preferredFramesPerSecond`, tách biệt hoàn toàn với giới hạn 5–30 FPS của cửa sổ PiP/AFK nền.
+          - **Tối ưu độ mượt & giảm nhiệt kế thừa từ `v1.2.1`:** Chỉ siết `DARWIN_BG` khi iOS chạm `.critical`, nâng Gadget Cache Metal 4 lên `96 MiB`, mặc định bật `Ưu tiên JIT`, và hiển thị trạng thái **Động cơ CPU** trong bảng Thông số.
 
           ## Hướng dẫn thiết lập nhanh (Mô hình VMware)
 

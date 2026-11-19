@@ -134,7 +134,7 @@ void lookup_maps_entries_and_table_offsets()
 	std::span<const std::uint32_t> instructions)
 {
 	return gadgets::Builder{}.build(0x8000, instructions, {},
-		std::pmr::get_default_resource(), {},
+		::uml::cpu::pmr::get_default_resource(), {},
 		gadgets::BuildOptions{.host_capabilities = host});
 }
 

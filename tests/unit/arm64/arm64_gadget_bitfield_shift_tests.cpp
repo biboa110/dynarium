@@ -186,7 +186,7 @@ void forwarded_edges()
 			add_x6_x4_x5, system_call};
 		const auto enabled = g::Builder{}.build(base, code);
 		const auto disabled = g::Builder{}.build(base, code, {},
-			std::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
+			::uml::cpu::pmr::get_default_resource(), {}, {.scalar_forwarding = false});
 		require(enabled.complete && disabled.complete);
 		const auto on = enabled.program.words();
 		const auto off = disabled.program.words();
@@ -233,7 +233,7 @@ void streaming_program()
 		const std::array code{encode(sf, opc, shape[0], shape[1], 5, 3),
 			system_call};
 		const auto built = g::Builder{}.build(base, code, {},
-			std::pmr::get_default_resource(), {}, {.svcr = a::svcr_sm});
+			::uml::cpu::pmr::get_default_resource(), {}, {.svcr = a::svcr_sm});
 		require(built.complete);
 		require(built.program.words()[0] ==
 			expected_entry(sf, opc == 0U, shape[0], shape[1]));

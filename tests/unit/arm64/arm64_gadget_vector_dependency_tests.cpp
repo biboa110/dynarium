@@ -77,7 +77,7 @@ void compare(std::span<const std::uint32_t> code, unsigned seed, std::uint32_t f
 	uml::memory::Tlb &tlb, bool modelled = true)
 {
 	const auto disabled = g::Builder{}.build(pc, code, {},
-		std::pmr::get_default_resource(), {}, {.vector_forwarding = false});
+		::uml::cpu::pmr::get_default_resource(), {}, {.vector_forwarding = false});
 	const auto enabled = g::Builder{}.build(pc, code);
 	require(disabled.complete && enabled.complete);
 	auto expected = initial(seed, fpcr), off = expected, on = expected;
@@ -109,7 +109,7 @@ void compare(std::span<const std::uint32_t> code, unsigned seed, std::uint32_t f
 g::ScalarAccess access(std::uint32_t instruction)
 {
 	const auto built = g::Builder{}.build(pc, std::array{instruction}, {},
-		std::pmr::get_default_resource(), {}, {.vector_forwarding = false});
+		::uml::cpu::pmr::get_default_resource(), {}, {.vector_forwarding = false});
 	for (unsigned words = 2; words <= 4 && words <= built.program.words().size(); ++words) {
 		const auto result = g::vector_access(built.program.words().first(words));
 		if (result.contract) return result;
@@ -180,7 +180,7 @@ void broad_matrix(uml::memory::Tlb &tlb)
 		edges += mask != 0;
 		const std::array code{move(0, 31), word, move(30, word & 31U), svc};
 		const auto on = g::Builder{}.build(pc, code);
-		const auto off = g::Builder{}.build(pc, code, {}, std::pmr::get_default_resource(), {},
+		const auto off = g::Builder{}.build(pc, code, {}, ::uml::cpu::pmr::get_default_resource(), {},
 			{.vector_forwarding = false});
 		constexpr auto position = 2U;
 		require(on.program.words().size() == off.program.words().size());
@@ -225,7 +225,7 @@ void boundaries(uml::memory::Tlb &tlb)
 		const std::array code{producer, middle, consumer, svc};
 		compare(code, 124, 0, tlb);
 		const auto on = g::Builder{}.build(pc, code);
-		const auto off = g::Builder{}.build(pc, code, {}, std::pmr::get_default_resource(), {},
+		const auto off = g::Builder{}.build(pc, code, {}, ::uml::cpu::pmr::get_default_resource(), {},
 			{.vector_forwarding = false});
 		require(std::equal(on.program.words().begin(), on.program.words().end(),
 			off.program.words().begin(), off.program.words().end()));
@@ -251,7 +251,7 @@ void linked_boundaries(uml::memory::Tlb &tlb)
 				if (target == pc) return &loop;
 				require(target == pc + 16);
 				return &end;
-			}, std::pmr::get_default_resource(), {}, {.vector_forwarding = forwarding});
+			}, ::uml::cpu::pmr::get_default_resource(), {}, {.vector_forwarding = forwarding});
 		require(built.complete && built.program.instruction_count() == code.size());
 		loop.stream = built.program.words().data();
 		loop.instruction_count = code.size();

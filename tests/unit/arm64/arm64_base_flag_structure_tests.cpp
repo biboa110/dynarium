@@ -12,7 +12,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <string_view>
 
 namespace uml::emulator::tests::base_flag {
@@ -73,7 +73,7 @@ using uml::emulator::tests::address;
 	gadgets::BuildOptions options{};
 	options.force_software_flags = force_software;
 	return gadgets::Builder{}.build(engine_test_code_base, code, {},
-		std::pmr::get_default_resource(), {}, options);
+		::uml::cpu::pmr::get_default_resource(), {}, options);
 }
 
 [[nodiscard]] unsigned conditional_branches(std::uintptr_t entry)

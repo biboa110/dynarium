@@ -12,7 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <set>
 #include <string_view>
 
@@ -154,7 +154,7 @@ void translation_specializes_operation_host_path_and_registers()
 		const auto portable = gadgets::Builder{}.build(
 			test::engine_tests::engine_test_code_base,
 			std::array{test::instruction(variant)}, {},
-			std::pmr::get_default_resource(), {}, options);
+			::uml::cpu::pmr::get_default_resource(), {}, options);
 		const auto portable_words = portable.program.words();
 		test::require(portable.complete &&
 				portable_words.size() == 4U,

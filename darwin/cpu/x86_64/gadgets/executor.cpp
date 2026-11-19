@@ -26,7 +26,6 @@
 #endif
 #include <cstring>
 #include <memory>
-#include <memory_resource>
 #include <new>
 #include <optional>
 #include <span>

@@ -96,6 +96,7 @@ final class HostHardwareProfile: ObservableObject {
     let physicalProcessorCount: Int
     let maxVCPUs: Int
     let guestMemoryCeilingMiB: Int
+    let maxDisplayRefreshRate: Int
     let edition: DynariumEdition
     let appVersionString: String
     let buildNumberString: String
@@ -164,6 +165,7 @@ final class HostHardwareProfile: ObservableObject {
         self.physicalProcessorCount = cores
         self.maxVCPUs = max(1, GuestProcessorLimit.vCPUs(physicalProcessorCount: cores))
         self.guestMemoryCeilingMiB = max(512, Int(kernarium_runtime_loader_guest_memory_ceiling_mib()))
+        self.maxDisplayRefreshRate = max(60, UIScreen.main.maximumFramesPerSecond)
 
         if let frameworksURL = Bundle.main.privateFrameworksURL,
            FileManager.default.fileExists(

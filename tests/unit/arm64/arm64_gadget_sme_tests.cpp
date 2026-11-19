@@ -963,7 +963,7 @@ void streaming_twin_table()
 		const std::array window{word};
 		const auto built = gadgets::Builder{}.build(code_base, window,
 			[&](std::uint64_t) { return &link; },
-			std::pmr::get_default_resource(),
+			::uml::cpu::pmr::get_default_resource(),
 			[&](std::uint64_t) { return &site; }, options);
 		require(built.program.instruction_count() == 1);
 		return built.program.words()[0];
@@ -1160,7 +1160,7 @@ using arm64::detail::SmeOperandKind;
 	const std::array window{word};
 	const auto built = gadgets::Builder{}.build(code_base, window,
 		[&](std::uint64_t) { return &link; },
-		std::pmr::get_default_resource(),
+		::uml::cpu::pmr::get_default_resource(),
 		[&](std::uint64_t) { return &site; }, options);
 	const auto &words = built.program.words();
 	return {words.data(), words.data() + words.size()};
@@ -2170,7 +2170,7 @@ struct EntryFinding final {
 			const std::array window{word};
 			const auto built = gadgets::Builder{}.build(code_base,
 				window, [&](std::uint64_t) { return &link; },
-				std::pmr::get_default_resource(),
+				::uml::cpu::pmr::get_default_resource(),
 				[&](std::uint64_t) { return &site; }, options);
 			const auto stream = std::span{built.program.words().data(),
 				built.program.words().size()};

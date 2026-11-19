@@ -56,7 +56,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <optional>
 #include <span>
 #include <string>
@@ -210,7 +210,7 @@ namespace {
 	const gadgets::BuildOptions options;
 	const auto output = gadgets::a32::build(
 		{.key = aarch32::a32_key(code_base), .code = std::as_bytes(words)},
-		{}, std::pmr::get_default_resource(), {}, options,
+		{}, ::uml::cpu::pmr::get_default_resource(), {}, options,
 		gadgets::a32::decode_profile(options), 64);
 	for (const auto word : output.result.program.words())
 		if (std::find(std::begin(skips), std::end(skips), word) !=
@@ -1855,7 +1855,7 @@ namespace {
 	const gadgets::BuildOptions options;
 	const auto output = gadgets::a32::build(
 		{.key = aarch32::a32_key(code_base), .code = std::as_bytes(words)},
-		{}, std::pmr::get_default_resource(), {}, options,
+		{}, ::uml::cpu::pmr::get_default_resource(), {}, options,
 		gadgets::a32::decode_profile(options), 64);
 	for (const auto word : output.result.program.words())
 		if (word == reinterpret_cast<std::uintptr_t>(gadget))
@@ -2137,7 +2137,7 @@ void an_a32_block_holds_all_sixty_four_instructions()
 			       std::span<const std::byte> code,
 			       std::size_t window) {
 		return gadgets::a32::build({.key = key, .code = code}, {},
-			std::pmr::get_default_resource(), {}, options,
+			::uml::cpu::pmr::get_default_resource(), {}, options,
 			gadgets::a32::decode_profile(options), window)
 			.result.program.instruction_count();
 	};
@@ -2928,7 +2928,7 @@ void the_tlb_probe_hits_inside_a_page_and_not_across_one()
 			{.key = aarch32::a32_key(code_base),
 			 .code = std::as_bytes(std::span{&word, 1}),
 			 .single = true},
-			{}, std::pmr::get_default_resource(), {}, options,
+			{}, ::uml::cpu::pmr::get_default_resource(), {}, options,
 			gadgets::a32::decode_profile(options), 64);
 		auto cpu = a32_state();
 		cpu.registers[0] = value;
@@ -2974,7 +2974,7 @@ void the_tlb_probe_hits_inside_a_page_and_not_across_one()
 			{.key = aarch32::a32_key(code_base),
 			 .code = std::as_bytes(std::span{&vst1_8_d0_d1_r1, 1}),
 			 .single = true},
-			{}, std::pmr::get_default_resource(), {}, options,
+			{}, ::uml::cpu::pmr::get_default_resource(), {}, options,
 			gadgets::a32::decode_profile(options), 64);
 		cpu.registers[1] = second - 4;
 		std::size_t executed = 0;
@@ -3014,7 +3014,7 @@ void an_entry_the_tlb_fills_hits_through_the_emitted_probe()
 			{.key = aarch32::a32_key(code_base),
 			 .code = std::as_bytes(std::span{&word, 1}),
 			 .single = true},
-			{}, std::pmr::get_default_resource(), {}, options,
+			{}, ::uml::cpu::pmr::get_default_resource(), {}, options,
 			gadgets::a32::decode_profile(options), 64);
 		auto cpu = a32_state();
 		cpu.registers[0] = value;

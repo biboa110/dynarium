@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 
 namespace arm64 = uml::cpu::arm64;
 namespace gadgets = arm64::gadgets;
@@ -193,7 +193,7 @@ void probe_shape_has_one_predecessor_and_eight_successors()
 	};
 
 	const auto result = gadgets::Builder{}.build(
-		code_base, instructions, {}, std::pmr::get_default_resource());
+		code_base, instructions, {}, ::uml::cpu::pmr::get_default_resource());
 	const auto words = result.program.words();
 	require(result.complete);
 	require(result.program.instruction_count() == instructions.size());
@@ -210,7 +210,7 @@ void probe_shape_has_one_predecessor_and_eight_successors()
 	for (std::size_t index = 0; index < successor_words.size(); ++index) {
 		const std::array successor{instructions[index * 2U + 1U]};
 		const auto selected = gadgets::Builder{}.build(
-			code_base, successor, {}, std::pmr::get_default_resource());
+			code_base, successor, {}, ::uml::cpu::pmr::get_default_resource());
 		require(selected.complete);
 		require(words[successor_words[index]] ==
 			selected.program.words().front());

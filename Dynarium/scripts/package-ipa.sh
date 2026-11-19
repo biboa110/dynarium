@@ -118,6 +118,10 @@ printf '%s' "$ent_dump" | grep -q 'com.apple.developer.kernel.extended-virtual-a
 	fail "Dynarium.app failed check-privacy-manifests.py"
 "$PYTHON" -B "$ROOT_DIR/scripts/check-no-fexcore.py" "$DEST_APP" ||
 	fail "Dynarium.app contains FEXCore symbols"
+if [ "$EXPECTED_MINOS" = "16.0" ]; then
+	"$PYTHON" -B "$ROOT_DIR/scripts/check-ios16-abi.py" "$DEST_APP" --expected-max-minos 16.0 ||
+		fail "Dynarium.app failed iOS 16.0 ABI verification"
+fi
 
 rm -f -- "$ABS_OUTPUT"
 (

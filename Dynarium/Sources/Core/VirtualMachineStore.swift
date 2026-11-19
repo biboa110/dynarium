@@ -43,6 +43,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
     var adbOverLan: Bool
     var preferJitIfAvailable: Bool
     var softwareBackend: PreferredSoftwareBackend
+    var targetDisplayFPS: Int
     var afkFrameRateLimit: Int
     var afkBlackoutEnabled: Bool
     var thermalSaverEnabled: Bool
@@ -52,7 +53,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
     enum CodingKeys: String, CodingKey {
         case id, name, systemImageID, guestMemoryMiB, vcpuCount, dataDiskGiB
         case retinaDisplay, autoResizeDisplay, bootMode, microphoneEnabled
-        case adbOverLan, preferJitIfAvailable, softwareBackend
+        case adbOverLan, preferJitIfAvailable, softwareBackend, targetDisplayFPS
         case afkFrameRateLimit, afkBlackoutEnabled, thermalSaverEnabled
         case createdAt, lastRunAt
     }
@@ -71,6 +72,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         adbOverLan: Bool,
         preferJitIfAvailable: Bool,
         softwareBackend: PreferredSoftwareBackend,
+        targetDisplayFPS: Int = 60,
         afkFrameRateLimit: Int,
         afkBlackoutEnabled: Bool,
         thermalSaverEnabled: Bool = false,
@@ -90,6 +92,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         self.adbOverLan = adbOverLan
         self.preferJitIfAvailable = preferJitIfAvailable
         self.softwareBackend = softwareBackend
+        self.targetDisplayFPS = targetDisplayFPS
         self.afkFrameRateLimit = afkFrameRateLimit
         self.afkBlackoutEnabled = afkBlackoutEnabled
         self.thermalSaverEnabled = thermalSaverEnabled
@@ -112,6 +115,7 @@ nonisolated struct VirtualMachineConfig: Codable, Identifiable, Equatable, Hasha
         adbOverLan = try c.decode(Bool.self, forKey: .adbOverLan)
         preferJitIfAvailable = try c.decode(Bool.self, forKey: .preferJitIfAvailable)
         softwareBackend = try c.decode(PreferredSoftwareBackend.self, forKey: .softwareBackend)
+        targetDisplayFPS = try c.decodeIfPresent(Int.self, forKey: .targetDisplayFPS) ?? 60
         afkFrameRateLimit = try c.decode(Int.self, forKey: .afkFrameRateLimit)
         afkBlackoutEnabled = try c.decode(Bool.self, forKey: .afkBlackoutEnabled)
         thermalSaverEnabled = try c.decodeIfPresent(Bool.self, forKey: .thermalSaverEnabled) ?? false
@@ -226,6 +230,7 @@ final class VirtualMachineStore: ObservableObject {
             adbOverLan: false,
             preferJitIfAvailable: true,
             softwareBackend: .auto,
+            targetDisplayFPS: (hardware.edition == .metal4Vulkan && hardware.maxDisplayRefreshRate >= 120) ? 120 : 60,
             afkFrameRateLimit: 10,
             afkBlackoutEnabled: true,
             thermalSaverEnabled: false,
@@ -306,6 +311,7 @@ final class VirtualMachineStore: ObservableObject {
             adbOverLan: false,
             preferJitIfAvailable: source.preferJitIfAvailable,
             softwareBackend: source.softwareBackend,
+            targetDisplayFPS: source.targetDisplayFPS,
             afkFrameRateLimit: source.afkFrameRateLimit,
             afkBlackoutEnabled: source.afkBlackoutEnabled,
             thermalSaverEnabled: source.thermalSaverEnabled,

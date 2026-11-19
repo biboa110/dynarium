@@ -35,7 +35,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <span>
 #include <sys/mman.h>
 #include <vector>
@@ -364,7 +364,7 @@ public:
 				const gadgets::BuildOptions options{};
 				const auto output = gadgets::a32::build(
 					{.key = key_pc, .code = bytes}, {},
-					std::pmr::get_default_resource(), {},
+					::uml::cpu::pmr::get_default_resource(), {},
 					options,
 					gadgets::a32::decode_profile(options), 64);
 				require(output.units != 0);
@@ -441,7 +441,7 @@ private:
 			options.svcr = mode;
 			options.host_capabilities = host_;
 			const auto built = gadgets::Builder{}.build(code_pc, words,
-				{}, std::pmr::get_default_resource(), {}, options);
+				{}, ::uml::cpu::pmr::get_default_resource(), {}, options);
 			require(built.complete);
 			cpu.access_fp_state();
 			std::size_t executed = 0;

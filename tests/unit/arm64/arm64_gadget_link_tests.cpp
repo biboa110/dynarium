@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <utility>
 
 namespace arm64 = uml::cpu::arm64;
@@ -486,7 +486,7 @@ int main()
 		auto built = gadgets::Builder{}.build(
 			0x4000, instructions,
 			[&](std::uint64_t) { return &self.link; });
-		gadgets::ProgramWords words{std::pmr::get_default_resource()};
+		gadgets::ProgramWords words{::uml::cpu::pmr::get_default_resource()};
 		for (const auto word : built.program.words())
 			words.push_back(word);
 		gadgets::Program precharged{

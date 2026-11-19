@@ -11,7 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <set>
 #include <span>
 #include <string_view>
@@ -122,7 +122,7 @@ using uml::emulator::tests::vector_offset;
 	return gadgets::Builder{}.build(
 		test::engine_tests::engine_test_code_base,
 		std::array{test::instruction(variant)}, {},
-		std::pmr::get_default_resource(), {}, options);
+		::uml::cpu::pmr::get_default_resource(), {}, options);
 }
 
 void require_translation(

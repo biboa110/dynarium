@@ -901,7 +901,16 @@ void appendKernelCommandLine(
 #if UML_GPU_SOFTWARE_RENDERER
     (void)tightMemoryHost;
 #endif
+    bool sawSetupWizard = false;
+    bool sawSerialNo = false;
     for (auto& argument : releaseArguments) {
+        if (argument.starts_with("androidboot.setupwizard_mode=")) {
+            argument = "androidboot.setupwizard_mode=DISABLED";
+            sawSetupWizard = true;
+        } else if (argument.starts_with("androidboot.serialno=")) {
+            argument = "androidboot.serialno=dynarium17";
+            sawSerialNo = true;
+        }
 #if UML_GPU_SOFTWARE_RENDERER
         if (argument.starts_with("androidboot.opengles.version=")) {
             argument = "androidboot.opengles.version=196608";
@@ -921,6 +930,12 @@ void appendKernelCommandLine(
         }
 #endif
         arguments.push_back(std::move(argument));
+    }
+    if (!sawSetupWizard) {
+        arguments.emplace_back("androidboot.setupwizard_mode=DISABLED");
+    }
+    if (!sawSerialNo) {
+        arguments.emplace_back("androidboot.serialno=dynarium17");
     }
 
     /* Android init imports this as ro.boot.lcd_density. The product's vendor

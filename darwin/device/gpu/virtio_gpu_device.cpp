@@ -13,7 +13,9 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <charconv>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -331,6 +333,23 @@ void writeMonitorDescriptor(
     edid[offset + 5U + length] = '\n';
 }
 
+[[nodiscard]] std::uint32_t configuredRefreshRateHz() noexcept
+{
+#ifdef UML_APP_STORE_RUNTIME
+    return 60U;
+#else
+    const char* const raw = std::getenv("UML_DISPLAY_REFRESH_HZ");
+    if (raw == nullptr || *raw == '\0')
+        return 60U;
+    std::uint32_t hz = 0U;
+    const auto* const end = raw + std::strlen(raw);
+    const auto [ptr, ec] = std::from_chars(raw, end, hz);
+    if (ec != std::errc {} || ptr != end || hz == 0U)
+        return 60U;
+    return std::clamp<std::uint32_t>(hz, 30U, 120U);
+#endif
+}
+
 std::array<std::uint8_t, protocol::baseEdidSize> makeEdid(
     std::uint32_t width,
     std::uint32_t height,
@@ -380,9 +399,10 @@ std::array<std::uint8_t, protocol::baseEdidSize> makeEdid(
         1023U, std::max<std::uint32_t>(8U, horizontalBlank / 3U));
     constexpr std::uint32_t verticalSyncOffset = 3;
     constexpr std::uint32_t verticalSyncPulse = 5;
+    const auto refreshHz = static_cast<std::uint64_t>(configuredRefreshRateHz());
     const auto clock = std::clamp<std::uint64_t>(
         ((static_cast<std::uint64_t>(width) + horizontalBlank) *
-             (static_cast<std::uint64_t>(height) + verticalBlank) * 60U +
+             (static_cast<std::uint64_t>(height) + verticalBlank) * refreshHz +
             5000U) /
             10000U,
         1U,
@@ -413,7 +433,7 @@ std::array<std::uint8_t, protocol::baseEdidSize> makeEdid(
         (heightMillimeters >> 8U));
     edid[timing + 17U] = 0x1e; // Non-interlaced separate positive sync.
 
-    writeMonitorDescriptor(edid, 72, 0xfc, "Kernarium");
+    writeMonitorDescriptor(edid, 72, 0xfc, "Dynarium");
     writeMonitorDescriptor(edid, 90, 0x10);
     writeMonitorDescriptor(edid, 108, 0x10);
     edid[126] = 0;

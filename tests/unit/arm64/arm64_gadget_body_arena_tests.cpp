@@ -8,7 +8,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <random>
 #include <utility>
 #include <vector>
@@ -130,7 +130,7 @@ private:
 	std::map<std::uintptr_t, std::size_t> extents_;
 	std::unique_ptr<gadgets::BodyArena> arena_ =
 		std::make_unique<gadgets::BodyArena>(
-			std::pmr::new_delete_resource());
+			::uml::cpu::pmr::new_delete_resource());
 };
 
 /* An arena that grows over many chunks keeps every block intact and findable

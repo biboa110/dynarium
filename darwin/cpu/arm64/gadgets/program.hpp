@@ -14,7 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory_resource>
+#include "../../memory_resource.hpp"
 #include <optional>
 #include <span>
 #include <utility>
@@ -42,7 +42,7 @@ public:
 		std::size_t size;
 	};
 
-	explicit ProgramWords(std::pmr::memory_resource *resource) noexcept
+	explicit ProgramWords(::uml::cpu::pmr::memory_resource *resource) noexcept
 		: resource_{resource}
 	{}
 
@@ -53,7 +53,7 @@ public:
 	{}
 
 	ProgramWords(const ProgramWords &other)
-		: resource_{std::pmr::get_default_resource()}
+		: resource_{::uml::cpu::pmr::get_default_resource()}
 	{
 		reserve(other.size_);
 		std::copy_n(other.data(), other.size_, data());
@@ -165,7 +165,7 @@ private:
 				alignof(std::uintptr_t));
 	}
 
-	std::pmr::memory_resource *resource_;
+	::uml::cpu::pmr::memory_resource *resource_;
 	std::size_t size_{};
 	std::size_t capacity_{inline_capacity};
 	std::uintptr_t *heap_{};
@@ -407,8 +407,8 @@ public:
 		std::uint64_t guest_address,
 		std::span<const std::uint32_t> instructions,
 		LinkResolver resolve_link = {},
-		std::pmr::memory_resource *storage =
-			std::pmr::get_default_resource(),
+		::uml::cpu::pmr::memory_resource *storage =
+			::uml::cpu::pmr::get_default_resource(),
 		IndirectLinkResolver resolve_indirect_link = {},
 		BuildOptions options = {}) const;
 };

@@ -105,6 +105,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private var activeMetalView: GuestMetalView?
     private var initialGeometry: GuestDisplayGeometry?
     private var bootLaunchedForSession = false
+    private var brandingAppliedForSession = false
     private var consoleLineBuffer = ""
     private var runtimeThread: Thread?
     private var thermalObserver: NSObjectProtocol?
@@ -164,6 +165,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         lastAppliedPageTrimState = nil
         keyboardVisible = false
         bootLaunchedForSession = false
+        brandingAppliedForSession = false
         initialGeometry = nil
         prevStatsTimestampNs = 0
         prevProcessorTimeNs = 0
@@ -204,7 +206,10 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         let timeZoneName = TimeZone.current.identifier
         let isUniversal = hardware.edition == .universalSoftware
 
-        // Configure Gallium software driver & disable LLVM draw JIT before selecting runtime.
+        // Configure display target refresh rate & Gallium software driver before selecting runtime.
+        let displayHz = min(max(vm.targetDisplayFPS, 60), hardware.maxDisplayRefreshRate)
+        setenv("UML_DISPLAY_REFRESH_HZ", String(displayHz), 1)
+
         if isUniversal {
             let driver = hardware.resolvedGalliumDriver(
                 preference: vm.softwareBackend,
@@ -237,6 +242,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
                     self.bootStartedAt = Date()
                     self.bootOverlayDismissed = false
                     self.framesSinceGraphics = 0
+                    self.brandingAppliedForSession = false
                     self.phase = .restarting(vmName: currentName, count: count)
                 case .booted:
                     if case .restarting = self.phase {
@@ -399,6 +405,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         thermalAutoThrottleActive = false
         jitActiveInSession = false
         framesSinceGraphics = 0
+        brandingAppliedForSession = false
         lastAppliedThrottleState = nil
         lastAppliedPageTrimState = nil
         stopMonitoringLoops()
@@ -698,6 +705,9 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         if next.displayActive && bootStage >= .formattingOrInit && Date().timeIntervalSince(bootStartedAt) > 12 && bootStage < .startingGraphics {
             bootStage = .startingGraphics
         }
+        if bootStage >= .startingGraphics && next.displayActive && framesSinceGraphics >= 8 {
+            applyDynariumGuestBrandingIfNeeded()
+        }
     }
 
     private func triggerLowSpacePause(freeBytes: UInt64) async {
@@ -799,6 +809,27 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         }
         if let detected, detected > bootStage {
             bootStage = detected
+            if detected == .ready {
+                applyDynariumGuestBrandingIfNeeded()
+            }
+        }
+    }
+
+    private func applyDynariumGuestBrandingIfNeeded() {
+        guard !brandingAppliedForSession, let vmID = activeVM?.id else { return }
+        brandingAppliedForSession = true
+        let clock = adbClock
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            if let identity = try? AdbKeyStore.forVM(vmID).loadOrCreate() {
+                let session = AdbSession(signer: identity.signer, clock: clock, connectLimit: 8)
+                _ = try? session.run { conn in
+                    _ = try conn.runShell(
+                        "settings put global device_name Dynarium && settings put secure bluetooth_name Dynarium && settings put global device_provisioned 1 && settings put secure user_setup_complete 1"
+                    )
+                }
+            }
         }
     }
 }

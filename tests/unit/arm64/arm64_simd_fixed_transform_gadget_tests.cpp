@@ -12,7 +12,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
+#include "cpu/memory_resource.hpp"
 #include <set>
 #include <span>
 #include <string_view>
@@ -151,7 +151,7 @@ using uml::emulator::tests::vector_offset;
   options.force_software_fixed_transforms = force_software;
   return gadgets::Builder{}.build(
       test::engine::engine_test_code_base, std::array{instruction}, {},
-      std::pmr::get_default_resource(), {}, options);
+      ::uml::cpu::pmr::get_default_resource(), {}, options);
 }
 
 template <std::size_t count>

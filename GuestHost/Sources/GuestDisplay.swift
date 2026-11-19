@@ -14,6 +14,7 @@ struct GuestDisplayGeometry {
 struct GuestDisplayView: UIViewControllerRepresentable {
     @Binding var keyboardVisible: Bool
     let retinaMode: Bool
+    var targetDisplayFPS: Int = 60
     /// Told each time touches begin on the display, after their contacts have
     /// gone to the guest. An application that draws controls over the display
     /// uses it to put them away when a touch lands on the guest instead.
@@ -28,6 +29,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         view.viewDidLayout = viewDidLayout
         view.touchDidBegin = touchDidBegin
         view.retinaMode = retinaMode
+        view.preferredFramesPerSecond = max(60, targetDisplayFPS)
         view.isPaused = true
         view.enableSetNeedsDisplay = true
         view.autoResizeDrawable = false
@@ -42,6 +44,7 @@ struct GuestDisplayView: UIViewControllerRepresentable {
         let view = controller.metalView
         view.touchDidBegin = touchDidBegin
         view.retinaMode = retinaMode
+        view.preferredFramesPerSecond = max(60, targetDisplayFPS)
         view.setKeyboardVisible(keyboardVisible)
         view.reportLayout()
     }

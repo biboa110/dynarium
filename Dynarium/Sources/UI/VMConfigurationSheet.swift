@@ -51,6 +51,7 @@ struct VMConfigurationSheet: View {
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = min(max(min(safeRAM, 896), minRAM), maxAllowed)
                             config.retinaDisplay = false
+                            config.targetDisplayFPS = 60
                             config.thermalSaverEnabled = true
                         }
                         PresetPillButton(title: "Khuyên dùng", icon: "checkmark.shield") {
@@ -58,6 +59,7 @@ struct VMConfigurationSheet: View {
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = hardware.safeRecommendedMemoryMiB(for: targetVCPUs)
                             config.retinaDisplay = hardware.defaultRetinaDisplay()
+                            config.targetDisplayFPS = 60
                             config.thermalSaverEnabled = false
                         }
                         PresetPillButton(title: "Hiệu năng", icon: "speedometer") {
@@ -67,6 +69,7 @@ struct VMConfigurationSheet: View {
                             config.vcpuCount = targetVCPUs
                             config.guestMemoryMiB = perfRAM
                             config.retinaDisplay = (hardware.edition == .metal4Vulkan)
+                            config.targetDisplayFPS = hardware.maxDisplayRefreshRate >= 120 ? 120 : 60
                             config.thermalSaverEnabled = false
                         }
                     }
@@ -167,6 +170,21 @@ struct VMConfigurationSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
+                        Picker("Tần số quét màn hình chính", selection: $config.targetDisplayFPS) {
+                            Text("60 Hz (Chuẩn & mát máy)").tag(60)
+                            if hardware.maxDisplayRefreshRate >= 90 {
+                                Text("90 Hz (Mượt)").tag(90)
+                            }
+                            if hardware.maxDisplayRefreshRate >= 120 {
+                                Text("120 Hz (ProMotion tối đa)").tag(120)
+                            }
+                        }
+                        Text("Màn hình iPhone/iPad hiện tại hỗ trợ tối đa \(hardware.maxDisplayRefreshRate) Hz. Đạt thực tế 60–120 FPS phụ thuộc vào bản Metal 4 và JIT.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
                         Toggle("Ưu tiên JIT (StikJIT / SideStore / TrollStore)", isOn: $config.preferJitIfAvailable)
                         Text("Tự động dùng trình biên dịch JIT nếu ứng dụng được gắn debugger/JIT giúp mượt hơn và mát máy hơn rõ rệt; tự quay về Gadget an toàn nếu không có JIT.")
                             .font(.caption)
@@ -174,18 +192,23 @@ struct VMConfigurationSheet: View {
                     }
                 }
 
-                Section("Thiết bị & AFK Chạy nền") {
+                Section {
                     Toggle("Bật Micro cho Android", isOn: $config.microphoneEnabled)
                     Toggle("Tự mở ADB qua Wi-Fi (cổng 5555)", isOn: $config.adbOverLan)
 
-                    Picker("Tốc độ khung hình PiP / AFK", selection: $config.afkFrameRateLimit) {
+                    Picker("Khung hình cửa sổ PiP / AFK", selection: $config.afkFrameRateLimit) {
                         Text("5 FPS (Tiết kiệm pin tối đa)").tag(5)
                         Text("10 FPS (Cân bằng)").tag(10)
                         Text("15 FPS (Mượt)").tag(15)
+                        Text("30 FPS (PiP mượt cao)").tag(30)
                     }
 
                     Toggle("Màn đen OLED khi bật AFK Eco Mode", isOn: $config.afkBlackoutEnabled)
                     Toggle("Chế độ Mát máy (Giảm tải CPU & tiết kiệm pin)", isOn: $config.thermalSaverEnabled)
+                } header: {
+                    Text("Thiết bị & AFK Chạy nền")
+                } footer: {
+                    Text("Giới hạn 5–30 FPS ở trên chỉ áp dụng cho cửa sổ PiP thu nhỏ / chế độ AFK chạy nền, không giới hạn màn hình chính 60–120 Hz.")
                 }
             }
             .navigationTitle(mode == .create ? "Tạo máy ảo mới" : "Cấu hình máy ảo")
