@@ -950,7 +950,6 @@ void appendKernelCommandLine(
     bool sawSetupWizard = false;
     bool sawSerialNo = false;
     bool sawAudit = false;
-    bool sawLogLevel = false;
     for (auto& argument : releaseArguments) {
         if (argument.starts_with("androidboot.setupwizard_mode=")) {
             argument = "androidboot.setupwizard_mode=DISABLED";
@@ -961,9 +960,6 @@ void appendKernelCommandLine(
         } else if (argument.starts_with("audit=")) {
             argument = "audit=0";
             sawAudit = true;
-        } else if (argument.starts_with("loglevel=")) {
-            argument = "loglevel=3";
-            sawLogLevel = true;
         }
 #if UML_GPU_SOFTWARE_RENDERER
         if (argument.starts_with("androidboot.opengles.version=")) {
@@ -997,9 +993,6 @@ void appendKernelCommandLine(
     }
     if (!sawAudit) {
         arguments.emplace_back("audit=0");
-    }
-    if (!sawLogLevel) {
-        arguments.emplace_back("loglevel=3");
     }
 
     /* Android init imports this as ro.boot.lcd_density. The product's vendor

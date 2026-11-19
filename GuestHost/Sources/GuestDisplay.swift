@@ -181,10 +181,17 @@ final class GuestMetalView: MTKView, UIKeyInput {
         // SwiftUI supplies safe-area-excluded point bounds. Point-resolution
         // mode maps them directly to guest pixels; Retina mode converts them
         // to physical backing pixels, including fractional native scales.
-        let pixelSize = CGSize(
-            width: (bounds.width * scale).rounded(.down),
-            height: (bounds.height * scale).rounded(.down)
-        )
+        let pixelSize: CGSize
+        if !retinaMode && maxLongEdgePixels > 0 {
+            let alignedWidth = max(2, ((bounds.width * scale).rounded(.down) / 2).rounded(.down) * 2)
+            let alignedHeight = max(2, ((bounds.height * scale).rounded(.down) / 2).rounded(.down) * 2)
+            pixelSize = CGSize(width: alignedWidth, height: alignedHeight)
+        } else {
+            pixelSize = CGSize(
+                width: (bounds.width * scale).rounded(.down),
+                height: (bounds.height * scale).rounded(.down)
+            )
+        }
         guard pixelSize.width >= 1, pixelSize.height >= 1 else { return }
         drawableSize = pixelSize
         let dotsPerInch = max(

@@ -946,10 +946,22 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         prevBootIndex = stats.boot_index
         telemetry = next
 
-        if next.displayActive && bootStage >= .formattingOrInit && Date().timeIntervalSince(bootStartedAt) > 12 && bootStage < .startingGraphics {
+        let elapsed = Date().timeIntervalSince(bootStartedAt)
+        if bootStage == .preparing
+            && (stats.processor_time_ns > 0 || stats.memory_held_bytes >= 8 * 1024 * 1024) {
+            bootStage = .kernelBooting
+        }
+        if bootStage == .kernelBooting
+            && (stats.memory_held_bytes >= 96 * 1024 * 1024 || (elapsed > 12 && stats.processor_time_ns > 0)) {
+            bootStage = .formattingOrInit
+        }
+        if next.displayActive && bootStage < .startingGraphics && (bootStage >= .formattingOrInit || elapsed > 15) {
             bootStage = .startingGraphics
         }
-        if bootStage >= .startingGraphics && next.displayActive && framesSinceGraphics >= 8 {
+        if next.displayActive
+            && ((bootStage >= .startingGraphics && framesSinceGraphics >= 8)
+                || (stats.presented_frames >= 24 && elapsed > 18)) {
+            bootStage = .ready
             applyDynariumGuestBrandingIfNeeded()
         }
     }
