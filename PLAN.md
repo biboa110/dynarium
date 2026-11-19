@@ -67,14 +67,14 @@ Thay vì nhồi cố định ~987 MB ảnh hệ thống vào trong gói cài đ�
   - Dựng và chạy thành công `.github/workflows/build-deps.yml` trên `macos-26` ARM64, xác minh `minos 16.0` và phát hành `deps-ios16-latest` (`dynarium-deps-ios16-arm64.tar.gz`).
 - [x] **Giai đoạn 2 — Kiến trúc Hypervisor Multi-VM, Kho ROM & Giao diện Apple HIG (`iOS 16.0+`)**
   - Khởi tạo dự án **XcodeGen** (`Dynarium/project.yml`), tương thích **iOS 16.0 – iOS 27+**, với `Dynarium/Config/` (`PrivacyInfo.xcprivacy`, `Dynarium.entitlements`, `DynariumNativeBridge.h`, `Version.xcconfig`) hoàn toàn không chứa tệp `.c` hay secret cục bộ.
-  - Vá tương thích iOS 16.0 trong `GuestHost/Sources/` (`GuestDisplay.swift`, `MicrophonePermission.swift`).
-  - Triển khai `HostHardwareProfile`, `ArchiveExtractor` (streaming `.tar.gz`/`.tar.zst`/`.tar` + APFS sparse `F_PUNCHHOLE` + SHA-256 + ZIP reader cho `.apks`/`.apkm`), `SystemImageStore`, `VirtualMachineStore` (hỗ trợ APFS CoW `clonefile`).
+  - Vá tương thích iOS 16.0 trong `GuestHost/Sources/` (`GuestDisplay.swift`, `MicrophonePermission.swift`, `SceneCoverage.swift`).
+  - Triển khai `HostHardwareProfile`, `ArchiveExtractor` (streaming `.tar.gz`/`.tar.zst`/`.tar` + APFS sparse hole skipping `lseek`/`ftruncate` + SHA-256 + ZIP reader cho `.apks`/`.apkm`), `SystemImageStore`, `VirtualMachineStore` (hỗ trợ APFS CoW `clonefile`).
   - Hoàn thiện UI thuần Apple HIG tiếng Việt (`MainTabView`, `MachinesListView`, `VMConfigurationSheet`, `SystemImagesView`, `AddSystemImageSheet`, `VMSessionView`, `FloatingSessionHUD`, `SerialConsoleSheet`, `SettingsView`, `AboutCreditsView`).
 - [ ] **Giai đoạn 3 — ANGLE Metal 2/3 Tier 2 (Nâng cấp phần cứng cho iOS 16–25)**
-  - Tích hợp `Google ANGLE` Metal backend (`libEGL` + `libGLESv2`) làm Dependency Prefix tùy chọn cho các máy Metal 2/3 chưa có iOS 26 Metal 4 (`KosmicKrisp`), nối qua `virglrenderer` + zero-copy `IOSurface -> MTLTexture` trên nền tảng `HostHardwareProfile.GraphicsTier` đã dựng sẵn.
+  - Tích hợp `Google ANGLE` Metal backend (`libEGL` + `libGLESv2`) làm Dependency Prefix tùy chọn cho các máy Metal 2/3 chưa có iOS 26 Metal 4 (`KosmicKrisp`), nối qua `virglrenderer` + zero-copy `IOSurface -> MTLTexture` trên nền tảng `HostHardwareProfile` (`DynariumEdition`).
 - [x] **Giai đoạn 4 — Đóng gói Frameworks, Kết nối ADB/APK Hybrid & Bộ công cụ AFK/PiP**
   - Xây dựng `Dynarium/scripts/package-dynarium-frameworks.sh` & `package-ipa.sh` hỗ trợ cả 2 biến thể `ios16-universal` (Universal Software `softpipe`/`llvmpipe` an toàn non-JIT) và `ios26-metal4` (Hardware Vulkan 1.4 / `KosmicKrisp`).
   - Hoàn thiện `AdbStack` + `ApkInstaller` (`.apk` đơn + split `.apks`/`.apkm`/`.zip` + ADB-over-LAN), `DynariumPiPController` (chuẩn iOS 16 `AVSampleBufferDisplayLayer`), và chế độ AFK Eco Mode (giảm xung nền + cắt cache trang + màn đen OLED).
-- [ ] **Giai đoạn 5 — CI Build Tự động & Phát hành Release `v1.0.0` (Dual `.ipa`)**
-  - Dựng `.github/workflows/build-ipa.yml` tự động build song song `Dynarium-v1.0.0.ipa` (iOS 16.0+ Universal) và `Dynarium-v1.0.0-Metal4-iOS26.ipa` (iOS 26+ Metal 4), tự động kiểm tra Mach-O `minos`, Privacy Manifests, No-FEXCore, và `ldid` entitlements.
-  - Tự động tạo GitHub Release theo tag version kèm 2 file `.ipa` + `SHA256SUMS.txt` để người dùng tải trực tiếp về máy kiểm thử final.
+- [x] **Giai đoạn 5 — CI Build Tự động & Phát hành Release `v1.0.0` (Dual `.ipa`)**
+  - Dựng `.github/workflows/build-ipa.yml` tự động build song song `Dynarium-v1.0.0.ipa` (`38.30 MiB`, iOS 16.0+ Universal) và `Dynarium-v1.0.0-Metal4-iOS26.ipa` (`21.76 MiB`, iOS 26+ Metal 4), tự động kiểm tra Mach-O `minos`, Privacy Manifests, No-FEXCore, và `ldid` entitlements.
+  - Phát hành GitHub Release `v1.0.0` (Run `#44466746986`) kèm cả 2 file `.ipa` + `SHA256SUMS.txt` để người dùng tải trực tiếp về máy kiểm thử final.
