@@ -402,6 +402,10 @@ jobs:
 
           ## What's New in `{tag}`
 
+          - **Fix false "storage full" pause and early shutdown on iOS 16 / 3 GB iPhones during Android boot:**
+            - Free-space reads that fail under memory pressure (returning 0) no longer count as a full disk; falls back to the plain volume figure and `statfs`.
+            - Memory guard is far less aggressive: it only trims and throttles during boot spikes, and stops Android only if RAM stays under 40 MiB for 6 seconds. Messages now say RAM, not storage.
+            - Guest RAM held to 512 MiB on hosts whose limit is under 2 GB (iPhone X / 8 Plus).
           - **Fix iOS 16 / 3 GB iPhones (iPhone X, 8 Plus, XR, 11) being closed by iOS (jetsam) after a long black screen:** the footprint reached ~1.6 GB during boot.
             - Low-memory host profile (process limit < 2.3 GB): at most 2 vCPU, safe guest RAM, 720p @ 60 Hz, renderer preload off, guest page-cache trimming always on.
             - JIT translation cache capped at 96 MiB on those hosts (`darwin/runtime/context.cpp`).
@@ -411,6 +415,7 @@ jobs:
 
           ## Điểm mới trong `{tag}` (Tiếng Việt)
 
+          - **Sửa lỗi báo "dung lượng đầy" giả và tự tắt máy ảo khi Android đang khởi động trên iOS 16 / iPhone 3 GB RAM:** khi iPhone thiếu RAM, việc đọc dung lượng trống có thể trả về 0 và bị hiểu nhầm là ổ đầy — nay được bỏ qua và đọc dự phòng bằng `statfs`. Bộ bảo vệ RAM bớt khắt khe (chỉ tắt Android khi RAM còn dưới 40 MiB liên tục 6 giây), thông báo ghi rõ là RAM chứ không phải dung lượng, và giới hạn RAM máy ảo 512 MiB trên iPhone X / 8 Plus.
           - **Sửa lỗi đen màn hình lâu rồi bị văng app trên iOS 16 / iPhone 3 GB RAM (iPhone X, 8 Plus, XR, 11):** iOS đóng app do bộ nhớ chạm ngưỡng (~1,6 GB). Thêm cấu hình máy ít RAM (tối đa 2 vCPU, RAM an toàn, 720p @ 60 Hz), giới hạn bộ nhớ đệm JIT 96 MiB, luôn thu hồi page cache của Android, và bộ bảo vệ bộ nhớ tự giảm tốc / tắt Android an toàn thay vì để iOS đóng app. Giảm số lần vẽ lại giao diện để bớt nóng máy. *(iPhone X iOS 16 dùng `Dynarium-{tag}.ipa`.)*
           - **Kế thừa `v1.5.1` và `v1.5.0`:** vá `RMIF` / `SIGILL` trên Apple A11 và **Cài đặt Ngôn ngữ** (**English, Tiếng Việt, 简体中文, 日本語, 한국어, Español**).
 

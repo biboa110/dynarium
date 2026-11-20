@@ -237,7 +237,12 @@ final class HostHardwareProfile: ObservableObject {
         var adjusted = vm
         adjusted.vcpuCount = min(max(1, vm.vcpuCount), min(2, maxVCPUs))
         let safeMemory = safeRecommendedMemoryMiB(for: adjusted.vcpuCount)
-        adjusted.guestMemoryMiB = max(minimumMemoryMiB(), min(vm.guestMemoryMiB, safeMemory))
+        // Under a ~2 GiB jetsam line (iPhone X / 8 Plus on iOS 16) the guest
+        // RAM is the one term large enough to matter: Android 17 boots in
+        // 512 MiB with its zram swap, and every extra 64 MiB brings the app
+        // closer to being ended by iOS.
+        let lowCeiling = effectiveMemoryLimitMiB < 2000 ? 512 : safeMemory
+        adjusted.guestMemoryMiB = max(minimumMemoryMiB(), min(vm.guestMemoryMiB, safeMemory, lowCeiling))
         adjusted.displayQuality = .economy
         adjusted.retinaDisplay = false
         adjusted.targetDisplayFPS = 60

@@ -281,8 +281,7 @@
 "session.stop.force_stopping" = "Đang ép dừng khẩn cấp máy ảo…";
 "session.stop.syncing_disk" = "Đang đồng bộ dữ liệu đĩa…";
 "session.error.mic_denied" = "Quyền Micro bị từ chối trong Cài đặt iOS.";
-"session.lowmem.warning" = "Bộ nhớ sắp đầy (còn %@). Dynarium đang thu hồi bộ nhớ đệm và giảm tốc Android để iOS không đóng ứng dụng. Hãy tắt bớt ứng dụng khác hoặc giảm RAM / vCPU máy ảo.";
-"session.lowmem.stopping" = "Bộ nhớ liên tục ở mức nguy hiểm nên Dynarium đang tắt Android an toàn để bảo vệ dữ liệu thay vì để iOS đóng ứng dụng. Hãy giảm RAM / vCPU máy ảo rồi khởi động lại.";
+"session.lowmem.stopping" = "RAM của iPhone (không phải dung lượng lưu trữ) liên tục gần cạn — chỉ còn %@ — nên Dynarium đã tắt Android an toàn để bảo vệ dữ liệu thay vì để iOS đóng ứng dụng. Hãy tắt bớt ứng dụng khác rồi chạy lại máy ảo.";
 "session.error.adb_lan_failed" = "Không thể mở cổng ADB Wi-Fi (5555): %@";
 "session.error.apk_busy" = "Đang cài một ứng dụng khác. Hãy chờ hoàn tất hoặc bấm Hủy ở thanh tiến trình phía trên.";
 "session.error.apk_no_vm" = "Không tìm thấy phiên máy ảo đang chạy để cài đặt %@.";

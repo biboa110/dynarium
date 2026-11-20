@@ -229,7 +229,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         let vm = hardware.lowMemorySafeConfiguration(for: requestedVM)
         let isFirstBoot = !vmStore.dataDiskExists(for: vm.id)
         let freeBytes = HostStorage.freeBytes()
-        if let shortage = StartSpace(freeBytes: freeBytes, firstStart: isFirstBoot) {
+        if freeBytes > 0, let shortage = StartSpace(freeBytes: freeBytes, firstStart: isFirstBoot) {
             startSpaceShortage = shortage
             return
         }
@@ -932,10 +932,12 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         spaceCheckTask = Task { [weak self] in
             while let self, !Task.isCancelled, self.phase.isActive {
                 let free = HostStorage.freeBytes()
-                if self.spacePause == nil, RunSpace.verdict(freeBytes: free) == .pause {
+                // Zero means the volume could not be read (it happens under
+                // heavy memory pressure), not that the disk is full.
+                if free > 0, self.spacePause == nil, RunSpace.verdict(freeBytes: free) == .pause {
                     await self.triggerLowSpacePause(freeBytes: free)
                 }
-                let delay = RunSpace.nextCheck(freeBytes: free)
+                let delay = free > 0 ? RunSpace.nextCheck(freeBytes: free) : .seconds(15)
                 try? await Task.sleep(for: delay)
             }
         }
@@ -977,11 +979,11 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         let mib = available / (1024 * 1024)
         var next = lowMemoryLevel
         if available > 0 {
-            if mib < 96 {
+            if mib < 64 {
                 next = .critical
-            } else if mib < 256 {
+            } else if mib < 192 {
                 next = .warning
-            } else if mib > 384 {
+            } else if mib > 320 {
                 next = .normal
             } else if next == .critical {
                 next = .warning
@@ -991,24 +993,29 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             next = max(next, .warning)
         }
 
-        if next == .critical {
-            lowMemoryCriticalStreak += systemWarning ? 2 : 1
-        } else {
+        // Booting Android fills RAM in bursts that the guest's own lmkd and
+        // page-cache trimming then give back, so a short dip is normal. Only a
+        // footprint that stays within a few MiB of the jetsam line for several
+        // seconds ends the guest; anything less only trims and throttles.
+        if available > 0 && mib < 40 {
+            lowMemoryCriticalStreak += 1
+        } else if next != .critical {
             lowMemoryCriticalStreak = 0
         }
 
         if next != lowMemoryLevel {
-            let escalated = next > lowMemoryLevel
             lowMemoryLevel = next
             applyRuntimeResourcePolicies()
-            if escalated && next == .critical {
-                errorBannerMessage = L10n.f("session.lowmem.warning", Formats.size(bytes: available))
+            if next == .critical {
+                consoleBuffer.append(
+                    "[Dynarium] Host RAM low (\(mib) MiB left): trimming guest page cache and throttling Android\n"
+                )
             }
         }
 
-        if lowMemoryCriticalStreak >= 3 {
+        if lowMemoryCriticalStreak >= 6 {
             lowMemoryCriticalStreak = 0
-            errorBannerMessage = L10n.t("session.lowmem.stopping")
+            errorBannerMessage = L10n.f("session.lowmem.stopping", Formats.size(bytes: available))
             requestQuickSafeStop()
         }
     }
