@@ -221,6 +221,30 @@ final class HostHardwareProfile: ObservableObject {
         return Int(availableProcessMemoryBytes / Bytes.mib)
     }
 
+    /// 3 GiB devices (iPhone X / 8 Plus / XR / 11, typically on iOS 16) whose
+    /// jetsam line sits near 1.8–2.2 GiB: the guest, the JIT cache and the
+    /// software renderer must be held to a small profile or iOS ends the app.
+    var isLowMemoryHost: Bool {
+        let limitMiB = effectiveMemoryLimitMiB
+        return limitMiB > 0 && limitMiB < 2300
+    }
+
+    /// Clamps a configuration to what a low-memory host can run without
+    /// jetsam: at most 2 vCPUs, the safe guest RAM, 720p and 60 Hz. Hosts with
+    /// enough memory get the configuration back unchanged.
+    func lowMemorySafeConfiguration(for vm: VirtualMachineConfig) -> VirtualMachineConfig {
+        guard isLowMemoryHost else { return vm }
+        var adjusted = vm
+        adjusted.vcpuCount = min(max(1, vm.vcpuCount), min(2, maxVCPUs))
+        let safeMemory = safeRecommendedMemoryMiB(for: adjusted.vcpuCount)
+        adjusted.guestMemoryMiB = max(minimumMemoryMiB(), min(vm.guestMemoryMiB, safeMemory))
+        adjusted.displayQuality = .economy
+        adjusted.retinaDisplay = false
+        adjusted.targetDisplayFPS = 60
+        adjusted.preloadRenderer = false
+        return adjusted
+    }
+
     func minimumMemoryMiB() -> Int { 512 }
 
     func maximumMemoryMiB(vcpus: Int) -> Int {

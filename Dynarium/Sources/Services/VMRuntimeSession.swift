@@ -195,6 +195,22 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var isInBackground = false
 
+    /// Host memory pressure as the app sees it: os_proc_available_memory()
+    /// against the jetsam line, plus UIKit's memory warnings.
+    private nonisolated enum LowMemoryLevel: Int, Comparable, Sendable {
+        case normal = 0
+        case warning = 1
+        case critical = 2
+
+        static func < (lhs: LowMemoryLevel, rhs: LowMemoryLevel) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
+    private var lowMemoryLevel: LowMemoryLevel = .normal
+    private var lowMemoryCriticalStreak = 0
+    private var memoryWarningObserver: NSObjectProtocol?
+
     private init() {
         spacePauser = SpacePauser(effects: self)
         pipController.setStateHandler { [weak self] _ in
@@ -204,11 +220,13 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
 
     // MARK: - Launch Lifecycle
 
-    func start(vm: VirtualMachineConfig, image: SystemImageManifest) {
+    func start(vm requestedVM: VirtualMachineConfig, image: SystemImageManifest) {
         guard !phase.isActive else { return }
         startSpaceShortage = nil
         errorBannerMessage = nil
 
+        hardware.refreshDynamicMetrics()
+        let vm = hardware.lowMemorySafeConfiguration(for: requestedVM)
         let isFirstBoot = !vmStore.dataDiskExists(for: vm.id)
         let freeBytes = HostStorage.freeBytes()
         if let shortage = StartSpace(freeBytes: freeBytes, firstStart: isFirstBoot) {
@@ -222,6 +240,14 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         telemetry = VMTelemetrySnapshot()
         consoleBuffer.reset()
         consoleText = ""
+        if vm != requestedVM {
+            consoleBuffer.append(
+                "[Dynarium] Low-memory host profile: \(vm.vcpuCount) vCPU, \(vm.guestMemoryMiB) MiB RAM, 720p @ 60 Hz "
+                    + "(requested \(requestedVM.vcpuCount) vCPU, \(requestedVM.guestMemoryMiB) MiB)\n"
+            )
+        }
+        lowMemoryLevel = .normal
+        lowMemoryCriticalStreak = 0
         shutdownStatusDetail = nil
         usedHardForceStop = false
         bootStage = .preparing
@@ -836,8 +862,13 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         let criticalThermal = (thermalState == .critical)
         thermalAutoThrottleActive = criticalThermal
 
-        let shouldThrottle = afkEcoMode || coolModeEnabled || criticalThermal || (isInBackground && pipController.isActive)
-        let shouldTrimPages = shouldThrottle || (hardware.edition == .universalSoftware && hardware.isMemoryEntitlementLimited)
+        let memoryCritical = lowMemoryLevel == .critical
+        let shouldThrottle = afkEcoMode || coolModeEnabled || criticalThermal || memoryCritical
+            || (isInBackground && pipController.isActive)
+        let shouldTrimPages = shouldThrottle
+            || lowMemoryLevel != .normal
+            || hardware.isLowMemoryHost
+            || (hardware.edition == .universalSoftware && hardware.isMemoryEntitlementLimited)
 
         if lastAppliedThrottleState != shouldThrottle {
             lastAppliedThrottleState = shouldThrottle
@@ -878,8 +909,22 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         statsTimer?.cancel()
         statsTimer = Task { [weak self] in
             while let self, !Task.isCancelled, self.phase.isActive {
+                self.evaluateHostMemoryPressure(systemWarning: false)
                 self.pollStatistics()
                 try? await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        if let memoryWarningObserver {
+            NotificationCenter.default.removeObserver(memoryWarningObserver)
+        }
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.evaluateHostMemoryPressure(systemWarning: true)
             }
         }
 
@@ -911,6 +956,61 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         spaceCheckTask = nil
         consoleFlushTask?.cancel()
         consoleFlushTask = nil
+        if let memoryWarningObserver {
+            NotificationCenter.default.removeObserver(memoryWarningObserver)
+            self.memoryWarningObserver = nil
+        }
+        lowMemoryLevel = .normal
+        lowMemoryCriticalStreak = 0
+    }
+
+    /// Keeps the VM inside the jetsam line instead of letting iOS kill the
+    /// whole app: trims the guest's page cache under pressure, throttles the
+    /// guest when memory is critical, and stops the guest cleanly (syncing
+    /// its data disk) if the footprint keeps closing on the limit.
+    private func evaluateHostMemoryPressure(systemWarning: Bool) {
+        guard phase.isActive, !hardware.isRunningOnMac else { return }
+        if case .stopping = phase { return }
+        if isInBackground && !pipController.isActive { return }
+
+        let available = dynarium_available_memory_bytes()
+        let mib = available / (1024 * 1024)
+        var next = lowMemoryLevel
+        if available > 0 {
+            if mib < 96 {
+                next = .critical
+            } else if mib < 256 {
+                next = .warning
+            } else if mib > 384 {
+                next = .normal
+            } else if next == .critical {
+                next = .warning
+            }
+        }
+        if systemWarning {
+            next = max(next, .warning)
+        }
+
+        if next == .critical {
+            lowMemoryCriticalStreak += systemWarning ? 2 : 1
+        } else {
+            lowMemoryCriticalStreak = 0
+        }
+
+        if next != lowMemoryLevel {
+            let escalated = next > lowMemoryLevel
+            lowMemoryLevel = next
+            applyRuntimeResourcePolicies()
+            if escalated && next == .critical {
+                errorBannerMessage = L10n.f("session.lowmem.warning", Formats.size(bytes: available))
+            }
+        }
+
+        if lowMemoryCriticalStreak >= 3 {
+            lowMemoryCriticalStreak = 0
+            errorBannerMessage = L10n.t("session.lowmem.stopping")
+            requestQuickSafeStop()
+        }
     }
 
     private func pollStatistics() {
@@ -935,12 +1035,12 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
             let wallDelta = Double(stats.timestamp_ns - prevStatsTimestampNs)
             let cpuDelta = Double(stats.processor_time_ns - prevProcessorTimeNs)
             let share = (cpuDelta / (wallDelta * Double(stats.processor_count))) * 100.0
-            next.cpuUtilizationPercent = min(max(share, 0), 100)
+            next.cpuUtilizationPercent = min(max(share, 0), 100).rounded()
 
             let frameCountDelta: UInt64 = stats.presented_frames >= prevPresentedFrames
                 ? (stats.presented_frames - prevPresentedFrames)
                 : 0
-            next.fps = Double(frameCountDelta) / (wallDelta / 1_000_000_000.0)
+            next.fps = (Double(frameCountDelta) / (wallDelta / 1_000_000_000.0) * 2).rounded() / 2
             if bootStage >= .startingGraphics {
                 framesSinceGraphics += frameCountDelta
             }
@@ -952,7 +1052,11 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         prevProcessorTimeNs = stats.processor_time_ns
         prevPresentedFrames = stats.presented_frames
         prevBootIndex = stats.boot_index
-        telemetry = next
+        // Publishing an unchanged snapshot re-renders the whole session view
+        // (and the guest display representable) on the main thread.
+        if next != telemetry {
+            telemetry = next
+        }
 
         let elapsed = Date().timeIntervalSince(bootStartedAt)
         if bootStage == .preparing

@@ -281,6 +281,8 @@
 "session.stop.force_stopping" = "Forzando detención de la VM…";
 "session.stop.syncing_disk" = "Sincronizando datos del disco…";
 "session.error.mic_denied" = "Permiso de micrófono denegado en Ajustes de iOS.";
+"session.lowmem.warning" = "La memoria está casi llena (quedan %@). Dynarium está liberando la caché del invitado y ralentizando Android para evitar que iOS cierre la app. Cierra otras apps o reduce la RAM / vCPU de la VM.";
+"session.lowmem.stopping" = "La memoria siguió en nivel crítico, así que Dynarium está apagando Android de forma segura para proteger tus datos en lugar de dejar que iOS cierre la app. Reduce la RAM / vCPU y reinicia.";
 "session.error.adb_lan_failed" = "No se pudo abrir el puerto ADB Wi-Fi (5555): %@";
 "session.error.apk_busy" = "Otra instalación está en curso. Espera a que termine o pulsa Cancelar arriba.";
 "session.error.apk_no_vm" = "No se encontró ninguna VM activa para instalar %@.";

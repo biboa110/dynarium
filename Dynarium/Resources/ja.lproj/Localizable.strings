@@ -281,6 +281,8 @@
 "session.stop.force_stopping" = "仮想マシンを強制終了中…";
 "session.stop.syncing_disk" = "ディスクデータを同期中…";
 "session.error.mic_denied" = "iOS の設定でマイクへのアクセスが拒否されています。";
+"session.lowmem.warning" = "メモリが残りわずかです（残り %@）。iOS にアプリを終了されないよう、Dynarium がゲストのキャッシュを解放し Android を減速しています。他のアプリを閉じるか、仮想マシンの RAM / vCPU を下げてください。";
+"session.lowmem.stopping" = "メモリの危険な不足が続いたため、iOS にアプリを終了される前に Dynarium がデータを保護して Android を安全にシャットダウンしています。RAM / vCPU を下げて再起動してください。";
 "session.error.adb_lan_failed" = "Wi-Fi ADB ポート (5555) を開けませんでした: %@";
 "session.error.apk_busy" = "別のアプリをインストール中です。完了を待つか上部のバーからキャンセルしてください。";
 "session.error.apk_no_vm" = "%@ をインストールするための稼働中の仮想マシンが見つかりません。";

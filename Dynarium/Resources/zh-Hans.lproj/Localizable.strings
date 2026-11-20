@@ -281,6 +281,8 @@
 "session.stop.force_stopping" = "正在强制停止虚拟机…";
 "session.stop.syncing_disk" = "正在同步磁盘数据…";
 "session.error.mic_denied" = "已在 iOS 设置中拒绝麦克风权限。";
+"session.lowmem.warning" = "内存即将耗尽（剩余 %@）。Dynarium 正在回收客户机缓存并降低 Android 速度，以免 iOS 关闭应用。请关闭其他应用或降低虚拟机内存 / vCPU。";
+"session.lowmem.stopping" = "内存持续处于危险水平，Dynarium 正在安全关闭 Android 以保护数据，而不是让 iOS 关闭应用。请降低虚拟机内存 / vCPU 后重新启动。";
 "session.error.adb_lan_failed" = "无法开启 Wi-Fi ADB 端口（5555）：%@";
 "session.error.apk_busy" = "另一项应用正在安装中，请等待完成或点击上方进度条取消。";
 "session.error.apk_no_vm" = "未找到正在运行的虚拟机以安装 %@。";

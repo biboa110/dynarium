@@ -402,16 +402,17 @@ jobs:
 
           ## What's New in `{tag}`
 
-          - **Fix Apple A11 / iOS 16 `Kernel mode signal 4` (`Darwin POSIX signal=4`) in AArch32 JIT (`boringssl_self_test32`):**
-            - Gated ARMv8.4 `RMIF` (`FEAT_FlagM`) in `A32Compiler::restore_logical_flags()` (`darwin/cpu/arm64/jit/a32/a32_compiler_alu.cpp`) behind `host_capabilities().has(ArmFeature::flag_m)` and added a pure ARMv8.0 `MRS`/`MSR NZCV` fallback (via `enc::mrs_nzcv` in `a32_encoders.hpp`) so 32-bit AArch32 binaries run safely on Apple A11 (`iPhone10,6`) without host `SIGILL`.
-          - **Includes all `v1.5.0` A11 & Localization improvements:**
-            - Fixed `/init` early `SIGILL` (`exitcode=0x00000004`) on Apple A11 / iOS 16 (narrowed C++ inline-asm `-march`, legacy `hw.optional.*` sysctl fallbacks, ARMv8.0 `LDAR` & software `DotProd`/`RDM`/`DIT` fallbacks, `[dynarium-sigill]` diagnostics).
-            - Full 6-language localization (`System Default`, `English`, `Tiếng Việt`, `简体中文`, `日本語`, `한국어`, `Español`) with instant live language switching in **Settings**.
+          - **Fix iOS 16 / 3 GB iPhones (iPhone X, 8 Plus, XR, 11) being closed by iOS (jetsam) after a long black screen:** the footprint reached ~1.6 GB during boot.
+            - Low-memory host profile (process limit < 2.3 GB): at most 2 vCPU, safe guest RAM, 720p @ 60 Hz, renderer preload off, guest page-cache trimming always on.
+            - JIT translation cache capped at 96 MiB on those hosts (`darwin/runtime/context.cpp`).
+            - New memory guard: trims the guest cache under pressure, throttles Android when memory is critical, and shuts Android down safely (syncing the data disk) instead of letting iOS kill the app.
+            - Fewer main-thread SwiftUI refreshes from session telemetry (lower wakeups and heat).
+          - **Includes `v1.5.1`:** ARMv8.0 fallback for A32 JIT `RMIF` (`FEAT_FlagM`) on Apple A11, plus all `v1.5.0` A11 SIGILL fixes and 6-language localization.
 
           ## Điểm mới trong `{tag}` (Tiếng Việt)
 
-          - **Sửa dứt điểm lỗi `Darwin POSIX signal=4` / `Kernel mode signal 4` khi chạy tiến trình 32-bit (`boringssl_self_test32`) trên iPhone X (Apple A11, iOS 16):** Bổ sung nhánh fallback chuẩn ARMv8.0 (`MRS`/`MSR NZCV`) thay cho lệnh ARMv8.4 `RMIF` (`FEAT_FlagM`) trong bộ biên dịch AArch32 JIT (`a32_compiler_alu.cpp`, `a32_encoders.hpp`) khi thiết bị không có `FEAT_FlagM`. *(Khuyên dùng `Dynarium-{tag}.ipa` Universal cho iPhone X & iPhone 14 Pro Max chạy iOS 16.)*
-          - **Kế thừa toàn bộ vá lỗi & tính năng từ `v1.5.0`:** Sửa lỗi `/init` `SIGILL` (`exitcode=0x00000004`) trên A11 và hỗ trợ **Cài đặt Ngôn ngữ** tức thì (**English, Tiếng Việt, 简体中文, 日本語, 한국어, Español**).
+          - **Sửa lỗi đen màn hình lâu rồi bị văng app trên iOS 16 / iPhone 3 GB RAM (iPhone X, 8 Plus, XR, 11):** iOS đóng app do bộ nhớ chạm ngưỡng (~1,6 GB). Thêm cấu hình máy ít RAM (tối đa 2 vCPU, RAM an toàn, 720p @ 60 Hz), giới hạn bộ nhớ đệm JIT 96 MiB, luôn thu hồi page cache của Android, và bộ bảo vệ bộ nhớ tự giảm tốc / tắt Android an toàn thay vì để iOS đóng app. Giảm số lần vẽ lại giao diện để bớt nóng máy. *(iPhone X iOS 16 dùng `Dynarium-{tag}.ipa`.)*
+          - **Kế thừa `v1.5.1` và `v1.5.0`:** vá `RMIF` / `SIGILL` trên Apple A11 và **Cài đặt Ngôn ngữ** (**English, Tiếng Việt, 简体中文, 日本語, 한국어, Español**).
 
           > Core Attribution: Built upon [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) and inspired by [`ish-app/ish`](https://github.com/ish-app/ish).
           """

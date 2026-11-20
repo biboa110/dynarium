@@ -562,10 +562,28 @@ std::size_t gadget_cache_budget_for(std::size_t guest_memory_bytes,
 }
 
 #ifndef UML_APP_STORE_RUNTIME
+namespace {
+
+/* A host whose process limit is this or less (3 GiB iPhones such as the
+ * iPhone X, 8 Plus, XR and 11 on iOS 16) cannot also fund the full JIT cache
+ * beside the guest's RAM, the renderer and the kernel: the footprint reached
+ * the jetsam line during boot. The JIT there keeps a smaller working set,
+ * which costs some retranslation and no correctness. */
+constexpr std::size_t tight_jit_host_limit_bytes =
+	std::size_t{2304} << 20;
+constexpr std::size_t tight_jit_cache_budget_bytes = std::size_t{96} << 20;
+
+} // namespace
+
 std::size_t jit_cache_budget_for(std::size_t guest_memory_bytes,
 	unsigned executors) noexcept
 {
-	return gadget_cache_budget_for(guest_memory_bytes, 0, executors);
+	auto budget = gadget_cache_budget_for(guest_memory_bytes, 0, executors);
+	const auto limit = static_cast<std::size_t>(
+		::uml::platform::process_memory_limit_bytes());
+	if (limit != 0 && limit <= tight_jit_host_limit_bytes)
+		budget = std::min(budget, tight_jit_cache_budget_bytes);
+	return budget;
 }
 
 JitMemoryStatus prepare_jit_memory(std::size_t guest_memory_bytes,
