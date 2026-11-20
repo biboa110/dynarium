@@ -402,24 +402,23 @@ jobs:
 
           ## What's New in `{tag}`
 
-          - **Fix "Install APK" doing nothing after picking a file (iOS 17–27):** the APK picker now uses SwiftUI's `fileImporter`, and the ROM picker keeps its delegate alive, so the selection is no longer lost when the picker dismisses itself.
-          - **Fix false "storage full" pause and early shutdown on iOS 16 / 3 GB iPhones during Android boot:**
-            - Free-space reads that fail under memory pressure (returning 0) no longer count as a full disk; falls back to the plain volume figure and `statfs`.
-            - Memory guard is far less aggressive: it only trims and throttles during boot spikes, and stops Android only if RAM stays under 40 MiB for 6 seconds. Messages now say RAM, not storage.
-            - Guest RAM held to 512 MiB on hosts whose limit is under 2 GB (iPhone X / 8 Plus).
-          - **Fix iOS 16 / 3 GB iPhones (iPhone X, 8 Plus, XR, 11) being closed by iOS (jetsam) after a long black screen:** the footprint reached ~1.6 GB during boot.
-            - Low-memory host profile (process limit < 2.3 GB): at most 2 vCPU, safe guest RAM, 720p @ 60 Hz, renderer preload off, guest page-cache trimming always on.
-            - JIT translation cache capped at 96 MiB on those hosts (`darwin/runtime/context.cpp`).
-            - New memory guard: trims the guest cache under pressure, throttles Android when memory is critical, and shuts Android down safely (syncing the data disk) instead of letting iOS kill the app.
-            - Fewer main-thread SwiftUI refreshes from session telemetry (lower wakeups and heat).
-          - **Includes `v1.5.1`:** ARMv8.0 fallback for A32 JIT `RMIF` (`FEAT_FlagM`) on Apple A11, plus all `v1.5.0` A11 SIGILL fixes and 6-language localization.
+          - **Direct UIKit APK & File Picker (iOS 16–27+):** Replaced SwiftUI `.fileImporter` in the VM session view with a dedicated UIKit presenter (`HostDocumentPickerPresenter`) that releases guest keyboard focus cleanly and retains the picker delegate across dismissal, fixing silent no-op picks on iOS 26/27.
+          - **Android File Manager & Bidirectional iPhone ↔ Android File Transfer:** New **Files** button on the floating HUD and session menu:
+            - **Send any files** from iPhone (`Downloads`, `iCloud`, `Files`, media, `.apk`, `.zip`, `.obb`) straight into Android internal storage (`/storage/emulated/0/Download`, etc.) via streaming VSOCK ADB `sync: SEND` with low RAM usage.
+            - **Export files & folders** from Android back to iPhone (`Save to Files` / AirDrop / Share Sheet).
+            - **`On My iPhone › Dynarium › Shared` Local Dropbox:** Place APKs or data files directly in the iOS Files app under `Dynarium/Shared` and install APKs or push them to Android with one tap — even without using the system picker dialog.
+            - **Install APKs stored inside Android** in one tap (`cmd package install`).
+          - **Includes `v1.5.2`–`v1.5.4` fixes:** False storage-full pause guard on low-memory hosts, 96 MiB JIT cache cap & anti-Jetsam tuning on 3 GB RAM iPhones (iPhone X / iOS 16), and A11 `RMIF` / `SIGILL` fixes.
 
           ## Điểm mới trong `{tag}` (Tiếng Việt)
 
-          - **Sửa lỗi bấm "Cài APK", chọn file xong không có phản hồi (iOS 17–27):** trình chọn APK chuyển sang `fileImporter` của SwiftUI và trình chọn ROM giữ lại delegate, nên lựa chọn không còn bị mất khi bảng chọn tự đóng.
-          - **Sửa lỗi báo "dung lượng đầy" giả và tự tắt máy ảo khi Android đang khởi động trên iOS 16 / iPhone 3 GB RAM:** khi iPhone thiếu RAM, việc đọc dung lượng trống có thể trả về 0 và bị hiểu nhầm là ổ đầy — nay được bỏ qua và đọc dự phòng bằng `statfs`. Bộ bảo vệ RAM bớt khắt khe (chỉ tắt Android khi RAM còn dưới 40 MiB liên tục 6 giây), thông báo ghi rõ là RAM chứ không phải dung lượng, và giới hạn RAM máy ảo 512 MiB trên iPhone X / 8 Plus.
-          - **Sửa lỗi đen màn hình lâu rồi bị văng app trên iOS 16 / iPhone 3 GB RAM (iPhone X, 8 Plus, XR, 11):** iOS đóng app do bộ nhớ chạm ngưỡng (~1,6 GB). Thêm cấu hình máy ít RAM (tối đa 2 vCPU, RAM an toàn, 720p @ 60 Hz), giới hạn bộ nhớ đệm JIT 96 MiB, luôn thu hồi page cache của Android, và bộ bảo vệ bộ nhớ tự giảm tốc / tắt Android an toàn thay vì để iOS đóng app. Giảm số lần vẽ lại giao diện để bớt nóng máy. *(iPhone X iOS 16 dùng `Dynarium-{tag}.ipa`.)*
-          - **Kế thừa `v1.5.1` và `v1.5.0`:** vá `RMIF` / `SIGILL` trên Apple A11 và **Cài đặt Ngôn ngữ** (**English, Tiếng Việt, 简体中文, 日本語, 한국어, Español**).
+          - **Sửa triệt để lỗi bấm "Cài APK" chọn file xong không phản hồi (iOS 16–27+):** Chuyển sang bộ mở tệp UIKit trực tiếp (`HostDocumentPickerPresenter`) tự nhả focus bàn phím máy ảo và giữ delegate an toàn khi đóng hộp thoại chọn tệp, chạy nền trên luồng ADB riêng (`AdbThreadRunner`).
+          - **Quản lý Tệp & Truyền file hai chiều iPhone ↔ Android (Nút "Tệp" mới trên thanh điều khiển):**
+            - **Gửi mọi loại tệp** (`.apk`, video, ảnh, tài liệu, `.zip`, `.obb`...) từ iPhone thẳng vào `/storage/emulated/0/Download` (hoặc bất kỳ thư mục nào) bên trong Android qua VSOCK ADB `sync:`.
+            - **Xuất tệp / thư mục từ Android về iPhone** qua Bảng chia sẻ / Lưu vào Tệp (Files).
+            - **Thư mục cục bộ `Trên iPhone của tôi › Dynarium › Shared`:** Chép sẵn file `.apk` hoặc dữ liệu vào thư mục này trong ứng dụng Tệp của iPhone rồi bấm **Cài APK** hoặc **Gửi vào** chỉ với 1 chạm (không phụ thuộc trình chọn file hệ thống).
+            - **Cài trực tiếp file `.apk` nằm sẵn trong Android** ngay từ trình duyệt tệp.
+          - **Kế thừa toàn bộ bản vá `v1.5.2`–`v1.5.3`:** Sửa lỗi báo "dung lượng đầy" giả trên máy ít RAM, chống Jetsam cho iPhone 3 GB RAM (iPhone X / iOS 16) và vá `RMIF` / `SIGILL` trên Apple A11.
 
           > Core Attribution: Built upon [`imxieyi/Kernarium`](https://github.com/imxieyi/Kernarium) and inspired by [`ish-app/ish`](https://github.com/ish-app/ish).
           """

@@ -6,8 +6,9 @@ struct FloatingSessionHUD: View {
     @Binding var collapsed: Bool
     @Binding var presentingConsole: Bool
     @Binding var presentingStats: Bool
-    @Binding var presentingApkImporter: Bool
+    @Binding var presentingFiles: Bool
     @Binding var confirmingShutdown: Bool
+    let onInstallApk: () -> Void
 
     @EnvironmentObject private var session: VMRuntimeSession
     @EnvironmentObject private var l10n: AppLocalization
@@ -64,7 +65,11 @@ struct FloatingSessionHUD: View {
                         }
 
                         HUDButton(icon: "square.and.arrow.down.on.square", label: l10n.t("hud.install_apk")) {
-                            presentingApkImporter = true
+                            onInstallApk()
+                        }
+
+                        HUDButton(icon: "folder", label: l10n.t("hud.files")) {
+                            presentingFiles = true
                         }
 
                         if pip.isSupported {
@@ -92,6 +97,12 @@ struct FloatingSessionHUD: View {
                                 presentingStats = true
                             } label: {
                                 Label(l10n.t("hud.menu.stats"), systemImage: "gauge.medium")
+                            }
+
+                            Button {
+                                presentingFiles = true
+                            } label: {
+                                Label(l10n.t("hud.menu.files"), systemImage: "folder")
                             }
 
                             Button {

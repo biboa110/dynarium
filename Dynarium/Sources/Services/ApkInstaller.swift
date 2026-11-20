@@ -5,17 +5,6 @@ import Darwin
 import Foundation
 import GuestHostCore
 
-private nonisolated final class ApkFileCoordinatorBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private let coordinator = NSFileCoordinator()
-
-    var current: NSFileCoordinator { coordinator }
-
-    func cancel() {
-        lock.withLock { coordinator.cancel() }
-    }
-}
-
 nonisolated enum ApkInstallState: Equatable, Sendable {
     case idle
     case preparing(String)
@@ -76,8 +65,9 @@ final class ApkInstaller: ObservableObject {
     @Published private(set) var state: ApkInstallState = .idle
 
     private var activeTask: Task<Void, Never>?
-    private var activeSession: AdbSession?
-    private var activeCoordinator: ApkFileCoordinatorBox?
+    private var activeSessionHolder: AdbSessionHolder?
+    private var activeCoordinator: AdbFileCoordinatorBox?
+    private var activeGeneration = UUID()
 
     private static let supportedExtensions: Set<String> = ["apk", "apks", "apkm", "xapk", "zip"]
 
@@ -89,12 +79,17 @@ final class ApkInstaller: ObservableObject {
             return
         }
 
-        let coordinator = ApkFileCoordinatorBox()
+        // Acquire the security-scoped resource immediately before the picker callback unwinds.
+        let scoped = fileURL.startAccessingSecurityScopedResource()
+        let coordinator = AdbFileCoordinatorBox()
+        let sessionHolder = AdbSessionHolder()
+        let generation = UUID()
+        activeGeneration = generation
         activeCoordinator = coordinator
+        activeSessionHolder = sessionHolder
         state = .preparing(L10n.f("apk.reading", fileURL.lastPathComponent))
 
         activeTask = Task {
-            let scoped = fileURL.startAccessingSecurityScopedResource()
             defer {
                 if scoped { fileURL.stopAccessingSecurityScopedResource() }
             }
@@ -104,33 +99,48 @@ final class ApkInstaller: ObservableObject {
                     vmID: vmID,
                     clock: clock,
                     coordinator: coordinator,
-                    onSession: { [weak self] session in
-                        Task { @MainActor [weak self] in self?.activeSession = session }
-                    },
+                    sessionHolder: sessionHolder,
                     onState: { [weak self] next in
-                        Task { @MainActor [weak self] in self?.state = next }
+                        Task { @MainActor [weak self] in
+                            guard let self, self.activeGeneration == generation else { return }
+                            self.state = next
+                        }
                     }
                 )
+                guard self.activeGeneration == generation else { return }
                 state = .completed(message)
             } catch is CancellationError {
+                guard self.activeGeneration == generation else { return }
                 state = .idle
             } catch let adbErr as AdbError where adbErr == .cancelled {
+                guard self.activeGeneration == generation else { return }
                 state = .idle
             } catch let adbErr as AdbError {
+                guard self.activeGeneration == generation else { return }
                 state = .failed(adbErr.localizedMessage)
             } catch {
+                guard self.activeGeneration == generation else { return }
                 state = .failed(error.localizedDescription)
             }
-            activeCoordinator = nil
-            activeSession = nil
-            activeTask = nil
+            if self.activeGeneration == generation {
+                activeCoordinator = nil
+                activeSessionHolder = nil
+                activeTask = nil
+            }
         }
     }
 
     func cancel() {
+        activeGeneration = UUID()
         activeCoordinator?.cancel()
-        activeSession?.cancel()
+        activeSessionHolder?.cancel()
         activeTask?.cancel()
+        activeCoordinator = nil
+        activeSessionHolder = nil
+        activeTask = nil
+        if state.isBusy {
+            state = .idle
+        }
     }
 
     func dismissStatus() {
@@ -143,46 +153,44 @@ final class ApkInstaller: ObservableObject {
         fileURL: URL,
         vmID: UUID,
         clock: AdbRunClock,
-        coordinator: ApkFileCoordinatorBox,
-        onSession: @escaping @Sendable (AdbSession) -> Void,
+        coordinator: AdbFileCoordinatorBox,
+        sessionHolder: AdbSessionHolder,
         onState: @escaping @Sendable (ApkInstallState) -> Void
     ) async throws -> String {
-        try await Task.detached(priority: .userInitiated) {
-            var installResult: Result<String, Error>?
-            var coordinationError: NSError?
+        try await AdbThreadRunner.run(
+            name: "dynarium-apk-install",
+            onCancel: {
+                coordinator.cancel()
+                sessionHolder.cancel()
+            }
+        ) {
+            try coordinator.coordinateReading(at: fileURL) { readableURL in
+                guard !sessionHolder.isCancelled else { throw CancellationError() }
+                try validateZipMagic(at: readableURL)
 
-            coordinator.current.coordinate(readingItemAt: fileURL, options: [], error: &coordinationError) { readableURL in
-                installResult = Result {
-                    try Task.checkCancellation()
-                    try validateZipMagic(at: readableURL)
+                let identity = try AdbKeyStore.forVM(vmID).loadOrCreate()
+                let session = AdbSession(signer: identity.signer, clock: clock)
+                sessionHolder.set(session)
 
-                    let identity = try AdbKeyStore.forVM(vmID).loadOrCreate()
-                    let session = AdbSession(signer: identity.signer, clock: clock)
-                    onSession(session)
-
-                    let ext = readableURL.pathExtension.lowercased()
-                    if ext == "apk" {
-                        return try installSingleApk(url: readableURL, session: session, onState: onState)
-                    } else {
-                        return try installSplitBundle(url: readableURL, session: session, onState: onState)
-                    }
+                let ext = readableURL.pathExtension.lowercased()
+                if ext == "apk" {
+                    return try installSingleApk(url: readableURL, session: session, holder: sessionHolder, onState: onState)
+                } else {
+                    return try installSplitBundle(url: readableURL, session: session, holder: sessionHolder, onState: onState)
                 }
             }
-
-            if let coordinationError {
-                throw coordinationError
-            }
-            try Task.checkCancellation()
-            guard let installResult else {
-                throw CancellationError()
-            }
-            return try installResult.get()
-        }.value
+        }
     }
 
     nonisolated private static func validateZipMagic(at url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+        if values.isDirectory == true {
+            throw NSError(domain: "Dynarium.ApkInstaller", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: L10n.f("apk.not_zip", url.lastPathComponent)
+            ])
+        }
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+        let size = (attrs[.size] as? NSNumber)?.uint64Value ?? UInt64(max(values.fileSize ?? 0, 0))
         guard size >= 4 else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: L10n.f("apk.empty_or_incomplete", url.lastPathComponent)
@@ -202,20 +210,28 @@ final class ApkInstaller: ObservableObject {
     nonisolated private static func installSingleApk(
         url: URL,
         session: AdbSession,
+        holder: AdbSessionHolder,
         onState: @escaping @Sendable (ApkInstallState) -> Void
     ) throws -> String {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        let size = (attrs[.size] as? NSNumber)?.intValue ?? 0
+        let size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
         guard size > 0 else {
             throw NSError(domain: "Dynarium.ApkInstaller", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: L10n.t("apk.empty_file")
             ])
         }
-        let totalLabel = Formats.size(bytes: UInt64(size))
+        let totalLabel = Formats.size(bytes: size)
         try session.run { conn in
-            try streamSingleApkToAbb(handleURL: url, size: size, connection: conn, watchdog: session.watchdog, onState: onState) { sent in
+            try streamSingleApkToAbb(
+                handleURL: url,
+                size: size,
+                connection: conn,
+                watchdog: session.watchdog,
+                holder: holder,
+                onState: onState
+            ) { sent in
                 let frac = min(max(Double(sent) / Double(size), 0), 1)
-                onState(.transferring(detail: L10n.f("apk.transfer_single", url.lastPathComponent, Formats.size(bytes: UInt64(sent)), totalLabel), progress: frac * 0.85))
+                onState(.transferring(detail: L10n.f("apk.transfer_single", url.lastPathComponent, Formats.size(bytes: sent), totalLabel), progress: frac * 0.85))
             }
         }
         return L10n.f("apk.installed_single", url.lastPathComponent)
@@ -224,6 +240,7 @@ final class ApkInstaller: ObservableObject {
     nonisolated private static func installSplitBundle(
         url: URL,
         session: AdbSession,
+        holder: AdbSessionHolder,
         onState: @escaping @Sendable (ApkInstallState) -> Void
     ) throws -> String {
         let scratch = FileManager.default.temporaryDirectory
@@ -253,7 +270,7 @@ final class ApkInstaller: ObservableObject {
             var lastReportedBytes: UInt64 = 0
             do {
                 for (idx, split) in splits.enumerated() {
-                    try Task.checkCancellation()
+                    guard !holder.isCancelled else { throw CancellationError() }
                     let splitSize = Int(split.uncompressedSize)
                     let safeSplitName = sanitizeSplitFileName(split.fileName)
                     let service = "abb_exec:package\0install-write\0-S\0\(splitSize)\0\(sessionID)\0split_\(idx)_\(safeSplitName)"
@@ -269,6 +286,7 @@ final class ApkInstaller: ObservableObject {
 
                     var sent = 0
                     while sent < splitSize {
+                        guard !holder.isCancelled else { throw CancellationError() }
                         let chunk = try fh.read(upToCount: min(256 * 1024, splitSize - sent)) ?? Data()
                         if chunk.isEmpty { throw AdbError.io(EIO) }
                         try writeStream.write(chunk)
@@ -338,26 +356,28 @@ final class ApkInstaller: ObservableObject {
 
     nonisolated private static func streamSingleApkToAbb(
         handleURL: URL,
-        size: Int,
+        size: UInt64,
         connection: AdbConnection,
         watchdog: AdbWatchdog,
+        holder: AdbSessionHolder,
         onState: @escaping @Sendable (ApkInstallState) -> Void,
-        progress: (Int) -> Void
+        progress: (UInt64) -> Void
     ) throws {
         let fh = try FileHandle(forReadingFrom: handleURL)
         defer { try? fh.close() }
         watchdog.arm(idle: 60)
         let stream = try connection.open("abb_exec:package\0install\0-r\0-t\0-S\0\(size)")
-        var sent = 0
-        var lastReported = 0
+        var sent: UInt64 = 0
+        var lastReported: UInt64 = 0
         progress(0)
         do {
             while sent < size {
-                try Task.checkCancellation()
-                let chunk = try fh.read(upToCount: min(256 * 1024, size - sent)) ?? Data()
+                guard !holder.isCancelled else { throw CancellationError() }
+                let readCount = Int(min(UInt64(256 * 1024), size - sent))
+                let chunk = try fh.read(upToCount: readCount) ?? Data()
                 if chunk.isEmpty { throw AdbError.io(EIO) }
                 try stream.write(chunk)
-                sent += chunk.count
+                sent += UInt64(chunk.count)
                 watchdog.touch()
                 if sent == size || sent - lastReported >= 1_048_576 {
                     lastReported = sent

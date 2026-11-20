@@ -161,6 +161,14 @@ private nonisolated extension Data {
         return value
     }
 
+    func readLE64(at offset: Int) -> UInt64 {
+        var value: UInt64 = 0
+        for index in 0..<8 {
+            value |= UInt64(self[startIndex + offset + index]) << (8 * UInt64(index))
+        }
+        return value
+    }
+
     mutating func appendLE32(_ value: UInt32) {
         var le = value.littleEndian
         Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
@@ -1285,5 +1293,321 @@ nonisolated final class AdbNetworkBridge: @unchecked Sendable {
                 Darwin.close(wakeWriter)
             }
         }
+    }
+}
+
+// MARK: - Shell Quoting, Dedicated Thread Runner & ADB Sync Service
+
+nonisolated enum AdbShellQuote {
+    static func quote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
+nonisolated final class AdbSessionHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var session: AdbSession?
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    func set(_ session: AdbSession) {
+        let shouldCancel = lock.withLock { () -> Bool in
+            self.session = session
+            return cancelled
+        }
+        if shouldCancel {
+            session.cancel()
+        }
+    }
+
+    func cancel() {
+        let current = lock.withLock { () -> AdbSession? in
+            cancelled = true
+            return session
+        }
+        current?.cancel()
+    }
+}
+
+nonisolated final class AdbFileCoordinatorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let coordinator = NSFileCoordinator()
+
+    func cancel() {
+        lock.withLock {
+            coordinator.cancel()
+        }
+    }
+
+    func coordinateReading<R>(at url: URL, _ body: (URL) throws -> R) throws -> R {
+        var innerResult: Result<R, Error>?
+        var coordinationError: NSError?
+        coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { readableURL in
+            innerResult = Result {
+                try body(readableURL)
+            }
+        }
+        if let coordinationError {
+            throw coordinationError
+        }
+        guard let innerResult else {
+            throw CancellationError()
+        }
+        return try innerResult.get()
+    }
+}
+
+nonisolated enum AdbThreadRunner {
+    static func run<Output: Sendable>(
+        name: String = "dynarium-adb",
+        onCancel: @escaping @Sendable () -> Void = {},
+        _ body: @escaping @Sendable () throws -> Output
+    ) async throws -> Output {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let thread = Thread {
+                    do {
+                        continuation.resume(returning: try body())
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+                thread.name = name
+                thread.qualityOfService = .userInitiated
+                thread.start()
+            }
+        } onCancel: {
+            onCancel()
+        }
+    }
+}
+
+nonisolated struct AdbFileStat: Equatable, Sendable {
+    var mode: UInt32
+    var size: UInt64
+    var modified: Int64
+
+    init(mode: UInt32, size: UInt64, modified: Int64 = 0) {
+        self.mode = mode
+        self.size = size
+        self.modified = modified
+    }
+
+    var exists: Bool { mode != 0 }
+    var isDirectory: Bool { (mode & AdbFileMode.typeMask) == AdbFileMode.directory }
+}
+
+nonisolated enum AdbFileMode {
+    static let typeMask: UInt32 = 0o170000
+    static let directory: UInt32 = 0o040000
+    static let regular: UInt32 = 0o100000
+    static let symlink: UInt32 = 0o120000
+}
+
+nonisolated struct AdbDirectoryEntry: Equatable, Sendable {
+    var name: String
+    var mode: UInt32
+    var size: UInt64
+    var modified: Int64
+
+    var isDirectory: Bool { (mode & AdbFileMode.typeMask) == AdbFileMode.directory }
+    var isSymlink: Bool { (mode & AdbFileMode.typeMask) == AdbFileMode.symlink }
+}
+
+nonisolated final class AdbSync {
+    static let maxChunk = 64 * 1024
+    static let sendBatch = 256 * 1024
+
+    private let stream: AdbStream
+    private let usesStatV2: Bool
+    private let usesListV2: Bool
+    private var buffer = Data()
+    private var bufferOffset = 0
+
+    init(connection: AdbConnection) throws {
+        stream = try connection.open("sync:")
+        usesStatV2 = connection.banner.features.contains("stat_v2")
+        usesListV2 = connection.banner.features.contains("ls_v2")
+    }
+
+    private func request(_ id: String, path: String) throws {
+        let name = Data(path.utf8)
+        var bytes = Data(id.utf8)
+        bytes.appendLE32(UInt32(name.count))
+        bytes.append(name)
+        try stream.write(bytes)
+    }
+
+    private func take(_ count: Int) throws -> Data {
+        while buffer.count - bufferOffset < count {
+            guard let more = try stream.read() else { throw AdbError.guestGone }
+            buffer.append(more)
+        }
+        let start = buffer.startIndex + bufferOffset
+        let taken = Data(buffer[start..<(start + count)])
+        bufferOffset += count
+        if bufferOffset == buffer.count {
+            buffer.removeAll(keepingCapacity: true)
+            bufferOffset = 0
+        } else if bufferOffset >= 1 << 20 {
+            buffer = Data(buffer[(buffer.startIndex + bufferOffset)...])
+            bufferOffset = 0
+        }
+        return taken
+    }
+
+    private func failure(length: Int) throws -> AdbError {
+        guard length <= 64 * 1024 else {
+            throw AdbError.protocolViolation("a FAIL of \(length) bytes")
+        }
+        return AdbError.remote(String(decoding: try take(length), as: UTF8.self))
+    }
+
+    func stat(_ path: String) throws -> AdbFileStat {
+        try request(usesStatV2 ? "STA2" : "STAT", path: path)
+        if usesStatV2 {
+            let reply = try take(72)
+            guard String(decoding: reply.prefix(4), as: UTF8.self) == "STA2" else {
+                throw AdbError.protocolViolation("an unexpected reply to STA2")
+            }
+            guard reply.readLE32(at: 4) == 0 else {
+                return AdbFileStat(mode: 0, size: 0)
+            }
+            return AdbFileStat(
+                mode: reply.readLE32(at: 24),
+                size: reply.readLE64(at: 40),
+                modified: Int64(bitPattern: reply.readLE64(at: 56))
+            )
+        }
+        let reply = try take(16)
+        guard String(decoding: reply.prefix(4), as: UTF8.self) == "STAT" else {
+            throw AdbError.protocolViolation("an unexpected reply to STAT")
+        }
+        return AdbFileStat(
+            mode: reply.readLE32(at: 4),
+            size: UInt64(reply.readLE32(at: 8)),
+            modified: Int64(Int32(bitPattern: reply.readLE32(at: 12)))
+        )
+    }
+
+    func list(_ path: String) throws -> [AdbDirectoryEntry] {
+        try request(usesListV2 ? "LIS2" : "LIST", path: path)
+        let fixed = usesListV2 ? 76 : 20
+        let tag = usesListV2 ? "DNT2" : "DENT"
+        var entries: [AdbDirectoryEntry] = []
+        while true {
+            let header = try take(fixed)
+            let id = String(decoding: header.prefix(4), as: UTF8.self)
+            if id == "DONE" { return entries }
+            guard id == tag else {
+                throw AdbError.protocolViolation("a listing reply \(id)")
+            }
+            let mode: UInt32
+            let size: UInt64
+            let modified: Int64
+            let nameLength: Int
+            var failed = false
+            if usesListV2 {
+                failed = header.readLE32(at: 4) != 0
+                mode = header.readLE32(at: 24)
+                size = header.readLE64(at: 40)
+                modified = Int64(bitPattern: header.readLE64(at: 56))
+                nameLength = Int(header.readLE32(at: 72))
+            } else {
+                mode = header.readLE32(at: 4)
+                size = UInt64(header.readLE32(at: 8))
+                modified = Int64(Int32(bitPattern: header.readLE32(at: 12)))
+                nameLength = Int(header.readLE32(at: 16))
+            }
+            guard nameLength >= 0, nameLength <= 1024 else {
+                throw AdbError.protocolViolation("a name of \(nameLength) bytes")
+            }
+            let name = String(decoding: try take(nameLength), as: UTF8.self)
+            if failed { continue }
+            entries.append(AdbDirectoryEntry(name: name, mode: mode, size: size, modified: modified))
+        }
+    }
+
+    func receive(_ path: String, chunk: (Data) throws -> Void) throws {
+        try request("RECV", path: path)
+        while true {
+            let header = try take(8)
+            let id = String(decoding: header.prefix(4), as: UTF8.self)
+            let length = Int(header.readLE32(at: 4))
+            switch id {
+            case "DATA":
+                guard length >= 0, length <= AdbWire.maxData else {
+                    throw AdbError.protocolViolation("a DATA chunk of \(length) bytes")
+                }
+                try chunk(try take(length))
+            case "DONE":
+                return
+            case "FAIL":
+                throw try failure(length: length)
+            default:
+                throw AdbError.protocolViolation("a sync reply \(id)")
+            }
+        }
+    }
+
+    func send(
+        _ path: String,
+        mode: UInt32,
+        modified: UInt32,
+        next: () throws -> Data?,
+        sent: (UInt64) -> Void = { _ in }
+    ) throws {
+        try request("SEND", path: "\(path),\(mode)")
+        var pending = Data()
+        var total: UInt64 = 0
+        do {
+            while let data = try next() {
+                if data.isEmpty { continue }
+                var offset = data.startIndex
+                while offset < data.endIndex {
+                    let end = min(offset + Self.maxChunk, data.endIndex)
+                    pending.append(contentsOf: "DATA".utf8)
+                    pending.appendLE32(UInt32(end - offset))
+                    pending.append(data[offset..<end])
+                    total += UInt64(end - offset)
+                    offset = end
+                    if pending.count >= Self.sendBatch {
+                        try stream.write(pending)
+                        pending.removeAll(keepingCapacity: true)
+                        sent(total)
+                    }
+                }
+            }
+            pending.append(contentsOf: "DONE".utf8)
+            pending.appendLE32(modified)
+            try stream.write(pending)
+        } catch AdbError.streamClosed {
+            guard let reason = try? readSendReply() else { throw AdbError.streamClosed }
+            throw reason
+        }
+        if let reason = try readSendReply() { throw reason }
+        sent(total)
+    }
+
+    private func readSendReply() throws -> AdbError? {
+        let header = try take(8)
+        let id = String(decoding: header.prefix(4), as: UTF8.self)
+        let length = Int(header.readLE32(at: 4))
+        switch id {
+        case "OKAY":
+            return nil
+        case "FAIL":
+            return try failure(length: length)
+        default:
+            throw AdbError.protocolViolation("a sync reply \(id)")
+        }
+    }
+
+    func quit() {
+        var bytes = Data("QUIT".utf8)
+        bytes.appendLE32(UInt32(0))
+        try? stream.write(bytes)
+        stream.close()
     }
 }

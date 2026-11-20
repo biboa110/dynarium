@@ -173,3 +173,116 @@ struct DocumentPickerSheet: UIViewControllerRepresentable {
         }
     }
 }
+
+@MainActor
+private func dynariumTopViewController() -> UIViewController? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let activeScene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    let windows = activeScene?.windows ?? []
+    let window = windows.first(where: \.isKeyWindow)
+        ?? windows.first(where: { !$0.isHidden })
+        ?? windows.first
+    guard var top = window?.rootViewController else { return nil }
+    while let presented = top.presentedViewController, !presented.isBeingDismissed {
+        top = presented
+    }
+    return top
+}
+
+@MainActor
+final class HostDocumentPickerPresenter: NSObject, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
+    static let shared = HostDocumentPickerPresenter()
+
+    private var onPick: (([URL]) -> Void)?
+    private var onCancel: (() -> Void)?
+    private weak var activePicker: UIDocumentPickerViewController?
+
+    private override init() {
+        super.init()
+    }
+
+    func present(
+        contentTypes: [UTType] = [.item],
+        allowsMultipleSelection: Bool = false,
+        onPick: @escaping ([URL]) -> Void,
+        onCancel: @escaping () -> Void = {},
+        onError: @escaping (String) -> Void = { _ in }
+    ) {
+        if let existing = activePicker, existing.presentingViewController != nil {
+            onError(L10n.t("picker.error.busy"))
+            return
+        }
+        activePicker = nil
+        self.onPick = nil
+        self.onCancel = nil
+
+        guard let top = dynariumTopViewController() else {
+            onError(L10n.t("picker.error.unavailable"))
+            return
+        }
+
+        // End text editing first so GuestMetalView releases keyboard focus before UIKit presents the picker.
+        top.view.window?.endEditing(true)
+
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: false)
+        picker.allowsMultipleSelection = allowsMultipleSelection
+        picker.delegate = self
+        picker.presentationController?.delegate = self
+
+        self.onPick = onPick
+        self.onCancel = onCancel
+        self.activePicker = picker
+
+        top.present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        let pickHandler = onPick
+        let cancelHandler = onCancel
+        clearState()
+        if urls.isEmpty {
+            cancelHandler?()
+        } else {
+            pickHandler?(urls)
+        }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        let cancelHandler = onCancel
+        clearState()
+        cancelHandler?()
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        let cancelHandler = onCancel
+        clearState()
+        cancelHandler?()
+    }
+
+    private func clearState() {
+        onPick = nil
+        onCancel = nil
+        activePicker = nil
+    }
+}
+
+@MainActor
+enum HostSharePresenter {
+    @discardableResult
+    static func present(_ items: [URL], completed: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }) -> Bool {
+        guard let top = dynariumTopViewController() else { return false }
+        let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        sheet.completionWithItemsHandler = { _, done, _, _ in
+            Task { @MainActor in
+                completed(done)
+            }
+        }
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = top.view
+            popover.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+        top.present(sheet, animated: true)
+        return true
+    }
+}

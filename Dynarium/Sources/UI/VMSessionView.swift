@@ -4,11 +4,11 @@ import Foundation
 import GuestHostCore
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 private enum ActiveSessionSheet: Int, Identifiable {
     case console
     case stats
+    case files
 
     var id: Int { rawValue }
 }
@@ -23,7 +23,6 @@ struct VMSessionView: View {
     @State private var coversScreen = true
     @State private var hudCollapsed = false
     @State private var activeSheet: ActiveSessionSheet?
-    @State private var presentingApkImporter = false
     @State private var confirmingShutdown = false
 
     private func sheetBinding(for target: ActiveSessionSheet) -> Binding<Bool> {
@@ -41,33 +40,7 @@ struct VMSessionView: View {
 
     var body: some View {
         ZStack {
-            // SwiftUI's own importer keeps its picker delegate alive until the
-            // pick is delivered. A UIDocumentPickerViewController wrapped in a
-            // .sheet lost the pick on iOS 17+: the picker dismisses its own
-            // sheet, SwiftUI tears down the coordinator, and the weak delegate
-            // is gone before didPickDocumentsAt runs. It is attached here,
-            // apart from the view that owns the sheets, so the two
-            // presentations never compete.
             Color.black.ignoresSafeArea()
-                .fileImporter(
-                    isPresented: $presentingApkImporter,
-                    allowedContentTypes: [.item],
-                    allowsMultipleSelection: false
-                ) { result in
-                    switch result {
-                    case let .success(urls):
-                        guard let url = urls.first else { return }
-                        if installer.state.isBusy {
-                            session.errorBannerMessage = l10n.t("session.error.apk_busy")
-                        } else if let vmID = session.activeVM?.id {
-                            installer.install(fileURL: url, vmID: vmID, clock: session.adbClock)
-                        } else {
-                            session.errorBannerMessage = l10n.f("session.error.apk_no_vm", url.lastPathComponent)
-                        }
-                    case let .failure(error):
-                        session.errorBannerMessage = error.localizedDescription
-                    }
-                }
 
             // Hidden small anchor required by AVSampleBufferDisplayLayer PiP on iOS 16+.
             PiPHostViewRepresentable(controller: pip)
@@ -130,8 +103,9 @@ struct VMSessionView: View {
                     collapsed: $hudCollapsed,
                     presentingConsole: sheetBinding(for: .console),
                     presentingStats: sheetBinding(for: .stats),
-                    presentingApkImporter: $presentingApkImporter,
-                    confirmingShutdown: $confirmingShutdown
+                    presentingFiles: sheetBinding(for: .files),
+                    confirmingShutdown: $confirmingShutdown,
+                    onInstallApk: presentApkPicker
                 )
             }
 
@@ -210,6 +184,8 @@ struct VMSessionView: View {
                     thermalAutoThrottleActive: session.thermalAutoThrottleActive,
                     jitActive: session.jitActiveInSession
                 )
+            case .files:
+                GuestFileBrowserSheet()
             }
         }
         .confirmationDialog(
@@ -246,6 +222,31 @@ struct VMSessionView: View {
         } message: {
             Text(session.errorBannerMessage ?? "")
         }
+    }
+
+    private func presentApkPicker() {
+        if installer.state.isBusy {
+            session.errorBannerMessage = l10n.t("session.error.apk_busy")
+            return
+        }
+        session.keyboardVisible = false
+        HostDocumentPickerPresenter.shared.present(
+            contentTypes: [.item],
+            allowsMultipleSelection: false,
+            onPick: { urls in
+                guard let url = urls.first else { return }
+                if installer.state.isBusy {
+                    session.errorBannerMessage = l10n.t("session.error.apk_busy")
+                } else if let vmID = session.activeVM?.id {
+                    installer.install(fileURL: url, vmID: vmID, clock: session.adbClock)
+                } else {
+                    session.errorBannerMessage = l10n.f("session.error.apk_no_vm", url.lastPathComponent)
+                }
+            },
+            onError: { message in
+                session.errorBannerMessage = message
+            }
+        )
     }
 }
 

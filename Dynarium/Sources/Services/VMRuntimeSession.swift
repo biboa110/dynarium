@@ -160,6 +160,7 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     }
 
     let installer = ApkInstaller()
+    let fileManager = GuestFileManager()
     let pipController = DynariumPiPController()
     let adbClock = AdbRunClock()
 
@@ -212,6 +213,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
     private var memoryWarningObserver: NSObjectProtocol?
 
     private init() {
+        HostSharedInbox.ensureDirectoryExists()
+        HostSharedInbox.sweepExports()
         spacePauser = SpacePauser(effects: self)
         pipController.setStateHandler { [weak self] _ in
             self?.applyRuntimeResourcePolicies()
@@ -521,6 +524,8 @@ final class VMRuntimeSession: ObservableObject, SpacePauseEffects {
         lastAppliedThrottleState = nil
         lastAppliedPageTrimState = nil
         stopMonitoringLoops()
+        installer.cancel()
+        fileManager.reset()
         setAdbOverLan(enabled: false)
         pipController.stop()
         spacePauser?.end()
