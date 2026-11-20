@@ -132,10 +132,18 @@ struct DocumentPickerSheet: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let controller = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: false)
+        let controller = RetainingDocumentPicker(forOpeningContentTypes: contentTypes, asCopy: false)
         controller.allowsMultipleSelection = false
         controller.delegate = context.coordinator
+        // UIDocumentPickerViewController holds its delegate weakly; when the
+        // picker dismisses its own sheet SwiftUI may release the coordinator
+        // before the pick is delivered. The picker keeps it alive instead.
+        controller.retainedDelegate = context.coordinator
         return controller
+    }
+
+    final class RetainingDocumentPicker: UIDocumentPickerViewController {
+        var retainedDelegate: AnyObject?
     }
 
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {
