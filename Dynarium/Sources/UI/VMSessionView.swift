@@ -4,6 +4,7 @@ import Foundation
 import GuestHostCore
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 private enum ActiveSessionSheet: Int, Identifiable {
     case console

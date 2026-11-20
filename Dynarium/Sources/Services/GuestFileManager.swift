@@ -169,7 +169,7 @@ nonisolated enum HostSharedInbox {
                 guard seenPaths.insert(resolvedPath).inserted else { continue }
                 let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
                 let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? UInt64(max(values?.fileSize ?? 0, 0))
-                let modified = (attrs?[.contentModificationDate] as? Date) ?? values?.contentModificationDate ?? Date()
+                let modified = (attrs?[.modificationDate] as? Date) ?? values?.contentModificationDate ?? Date()
                 results.append(HostSharedFile(url: url, name: name, size: size, modified: modified))
             }
         }
@@ -256,8 +256,8 @@ final class GuestFileManager: ObservableObject {
     private var activeTransferSessionHolder: AdbSessionHolder?
     private var activeTransferCoordinator: AdbFileCoordinatorBox?
 
-    private static let hostReserveBytes: UInt64 = 256 * 1024 * 1024
-    private static let guestReserveBytes: UInt64 = 256 * 1024 * 1024
+    private nonisolated static let hostReserveBytes: UInt64 = 256 * 1024 * 1024
+    private nonisolated static let guestReserveBytes: UInt64 = 256 * 1024 * 1024
 
     func refreshSharedInbox() {
         sharedInboxFiles = HostSharedInbox.listFiles()
@@ -682,7 +682,7 @@ final class GuestFileManager: ObservableObject {
 
                         let attrs = try FileManager.default.attributesOfItem(atPath: readableURL.path)
                         let fileSize = (attrs[.size] as? NSNumber)?.uint64Value ?? UInt64(max(values.fileSize ?? 0, 0))
-                        let modified = (attrs[.contentModificationDate] as? Date) ?? values.contentModificationDate ?? Date()
+                        let modified = (attrs[.modificationDate] as? Date) ?? values.contentModificationDate ?? Date()
                         let rawName = readableURL.lastPathComponent
                         guard GuestStoragePath.isValidName(rawName) else {
                             throw GuestFileTransferError.badPath(rawName)
