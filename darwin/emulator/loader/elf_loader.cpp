@@ -232,6 +232,49 @@ private:
  * as after the guest restarts in place, reuses it; the final protection pass
  * fails the load if it has lost its access. macOS could replace the alias,
  * and keeps it the same way, so that a restart takes the path iOS takes. */
+/* Diagnostic, not an execution fallback: compare non-fixed aliases with
+ * the failed fixed-overwrite RX mapping. This establishes whether iOS strips
+ * executable permissions from all aliases or just the requested target.
+ * Both scratch mappings are released before the ELF loader returns. */
+struct RxAnywhereProbe final {
+	kern_return_t result{KERN_INVALID_ARGUMENT};
+	vm_prot_t current{VM_PROT_NONE};
+	vm_prot_t maximum{VM_PROT_NONE};
+	vm_prot_t actual_current{VM_PROT_NONE};
+	vm_prot_t actual_maximum{VM_PROT_NONE};
+};
+
+[[nodiscard]] RxAnywhereProbe probe_anywhere_rx_remap(
+	const unsigned char *source, size_t length, boolean_t copy) noexcept
+{
+	RxAnywhereProbe outcome;
+	vm_address_t scratch = 0;
+	outcome.current = VM_PROT_READ | VM_PROT_EXECUTE;
+	outcome.maximum = VM_PROT_READ | VM_PROT_EXECUTE;
+	outcome.result = vm_remap(mach_task_self(), &scratch, length, 0,
+		VM_FLAGS_ANYWHERE, mach_task_self(),
+		reinterpret_cast<vm_address_t>(source), copy,
+		&outcome.current, &outcome.maximum, VM_INHERIT_NONE);
+	if (outcome.result != KERN_SUCCESS)
+		return outcome;
+	vm_address_t query = scratch;
+	vm_size_t query_size = 0;
+	vm_region_basic_info_data_64_t info = {};
+	mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+	mach_port_t object = MACH_PORT_NULL;
+	const kern_return_t queried = vm_region_64(mach_task_self(), &query,
+		&query_size, VM_REGION_BASIC_INFO_64,
+		reinterpret_cast<vm_region_info_t>(&info), &count, &object);
+	if (object != MACH_PORT_NULL)
+		(void)mach_port_deallocate(mach_task_self(), object);
+	if (queried == KERN_SUCCESS && query == scratch) {
+		outcome.actual_current = info.protection;
+		outcome.actual_maximum = info.max_protection;
+	}
+	(void)vm_deallocate(mach_task_self(), scratch, length);
+	return outcome;
+}
+
 [[nodiscard]] int remap_signed_executable(uintptr_t destination,
 	size_t length, const unsigned char *source)
 {
@@ -342,20 +385,24 @@ private:
 		/* Serial Console displays the stored ELF error, not the
 		 * preceding stderr lines. Embed the full source-range audit in
 		 * that error so it reaches the user-facing iOS dialog/console. */
+		/* The original fixed mapping failed its RX check. Probe both
+		 * shared and COW mappings at host-chosen addresses to isolate
+		 * address-placement policy from source-page signing policy. */
+		const RxAnywhereProbe shared =
+			probe_anywhere_rx_remap(source, length, FALSE);
+		const RxAnywhereProbe cow =
+			probe_anywhere_rx_remap(source, length, TRUE);
 		set_elf_error(
-			"UML ELF: signed RX remap failed [rx-audit-v2] "
-			"source=%#lx dest=%#lx kr=%d target=%#lx "
-			"cur=%#x max=%#x source_kr=%d source_cur=%#x "
-			"source_max=%#x audit_len=%zu scanned=%zu regions=%u "
-			"complete=%d first_non_rx=%#lx bad_cur=%#x "
-			"bad_max=%#x: %s",
-			static_cast<unsigned long>(reinterpret_cast<uintptr_t>(source)),
+			"UML ELF: signed RX remap failed [rx-probe-v3] "
+			"dest=%#lx fixed=%d/%#x/%#x "
+			"src=%#x/%#x audit=%zu/%zu regions=%u "
+			"complete=%d first_non_rx=%#lx "
+			"any_shared=%d/%#x/%#x/%#x/%#x "
+			"any_cow=%d/%#x/%#x/%#x/%#x",
 			static_cast<unsigned long>(destination),
 			static_cast<int>(result),
-			static_cast<unsigned long>(target),
 			static_cast<unsigned int>(current_protection),
 			static_cast<unsigned int>(maximum_protection),
-			static_cast<int>(source_result),
 			static_cast<unsigned int>(source_result == KERN_SUCCESS ?
 				source_info.protection : VM_PROT_NONE),
 			static_cast<unsigned int>(source_result == KERN_SUCCESS ?
@@ -363,9 +410,16 @@ private:
 			length, static_cast<size_t>(cursor - source_start),
 			regions, range_ok && cursor == source_limit ? 1 : 0,
 			static_cast<unsigned long>(first_non_rx),
-			static_cast<unsigned int>(bad_current),
-			static_cast<unsigned int>(bad_maximum),
-			mach_error_string(result));
+			static_cast<int>(shared.result),
+			static_cast<unsigned int>(shared.current),
+			static_cast<unsigned int>(shared.maximum),
+			static_cast<unsigned int>(shared.actual_current),
+			static_cast<unsigned int>(shared.actual_maximum),
+			static_cast<int>(cow.result),
+			static_cast<unsigned int>(cow.current),
+			static_cast<unsigned int>(cow.maximum),
+			static_cast<unsigned int>(cow.actual_current),
+			static_cast<unsigned int>(cow.actual_maximum));
 		return -1;
 	}
 
