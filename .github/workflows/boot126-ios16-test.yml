@@ -3,9 +3,9 @@
 # Produces a downloadable GitHub Actions artifact; does not publish a Release.
 name: Dynarium iOS16 Boot126 RX Trial
 
+# GitHub runner allocation repeatedly failed; keep this job as a manual fallback
+# while Codemagic handles the normal iOS 16 IPA build.
 on:
-  push:
-    branches: ['fix/ios16-elf126-cow-remap']
   workflow_dispatch:
 
 permissions:
