@@ -1485,11 +1485,7 @@ public:
 	 * `announcement` what this cache's executor says about itself; with
 	 * `share` false the cache keeps its address spaces to itself. */
 	ProgramCache(const BuildOptions &options, std::uint8_t mode,
-		const Announcement *announcement, bool share)
-		: options_{options}, mode_{mode}, announcement_{announcement},
-		  share_{share},
-		  build_scratch_{scratch_.data(), scratch_.size()}
-	{}
+		const Announcement *announcement, bool share);
 
 	~ProgramCache()
 	{
@@ -2839,6 +2835,17 @@ private:
 	std::array<SlabPointer, slab_count> slabs_;
 	std::array<std::uint8_t, set_count> next_replacement_{};
 };
+
+/* The deleter of slabs_ is a nested type defined later in ProgramCache.
+ * Define the constructor only after the class is complete so libc++ can
+ * instantiate array<unique_ptr<Slab, SlabDelete>> with a complete deleter.
+ * On newer Apple Clang this avoids the implicitly-deleted array constructor. */
+GadgetExecutor::ProgramCache::ProgramCache(const BuildOptions &options,
+	std::uint8_t mode, const Announcement *announcement, bool share)
+	: options_{options}, mode_{mode}, announcement_{announcement},
+	  share_{share},
+	  build_scratch_{scratch_.data(), scratch_.size()}
+{}
 
 GadgetExecutor::GadgetExecutor(arm64::gadgets::BuildOptions build_options)
 	: build_options_{build_options},
