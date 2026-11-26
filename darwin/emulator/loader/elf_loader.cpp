@@ -333,7 +333,7 @@ private:
 		fprintf(stderr,
 			"UML ELF: RX source-range audit length=%zu "
 			"scanned=%zu regions=%u complete=%d "
-			"first_non_rx=%#lx bad_cur=%#x bad_max=%#x\\n",
+			"first_non_rx=%#lx bad_cur=%#x bad_max=%#x\n",
 			length, static_cast<size_t>(cursor - source_start),
 			regions, range_ok && cursor == source_limit ? 1 : 0,
 			static_cast<unsigned long>(first_non_rx),
