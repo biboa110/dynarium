@@ -2184,7 +2184,14 @@ private:
 	/* Slabs come from the cache's own heap, which a cache that ends gives back
 	 * whole. */
 	struct SlabDelete final {
-		::uml::memory::DomainHeap *heap{};
+		/* An explicitly-provided default constructor makes the deleter
+		 * default-constructible for libc++'s unique_ptr constraints on
+		 * Xcode 26.2; the old default member initializer was rejected
+		 * while ProgramCache's nested type was being completed. */
+		::uml::memory::DomainHeap *heap;
+		SlabDelete() noexcept : heap{nullptr} {}
+		explicit SlabDelete(::uml::memory::DomainHeap *owner) noexcept
+			: heap{owner} {}
 		void operator()(Slab *slab) const noexcept
 		{
 			slab->~Slab();
