@@ -281,6 +281,64 @@ private:
 			&source_count, &source_object);
 		if (source_object != MACH_PORT_NULL)
 			(void)mach_port_deallocate(mach_task_self(), source_object);
+		/* The first carrier page may be executable while a later
+		 * source region is read-only. Audit the entire requested PT_LOAD
+		 * interval before attributing an RX downgrade to iOS policy.
+		 * This diagnostic only queries existing mappings. */
+		const auto source_start =
+			reinterpret_cast<std::uintptr_t>(source);
+		const bool range_ok = length <= UINTPTR_MAX - source_start;
+		const auto source_limit = range_ok ? source_start + length :
+			source_start;
+		std::uintptr_t cursor = source_start;
+		std::uintptr_t first_non_rx = 0;
+		vm_prot_t bad_current = VM_PROT_NONE;
+		vm_prot_t bad_maximum = VM_PROT_NONE;
+		unsigned regions = 0;
+		while (range_ok && cursor < source_limit && regions < 128) {
+			vm_address_t region = static_cast<vm_address_t>(cursor);
+			vm_size_t region_length = 0;
+			vm_region_basic_info_data_64_t region_info = {};
+			mach_msg_type_number_t region_count =
+				VM_REGION_BASIC_INFO_COUNT_64;
+			mach_port_t region_object = MACH_PORT_NULL;
+			const kern_return_t region_result = vm_region_64(
+				mach_task_self(), &region, &region_length,
+				VM_REGION_BASIC_INFO_64,
+				reinterpret_cast<vm_region_info_t>(&region_info),
+				&region_count, &region_object);
+			if (region_object != MACH_PORT_NULL)
+				(void)mach_port_deallocate(mach_task_self(),
+					region_object);
+			if (region_result != KERN_SUCCESS ||
+			    static_cast<std::uintptr_t>(region) > cursor ||
+			    region_length == 0 ||
+			    static_cast<std::uintptr_t>(region) >
+				UINTPTR_MAX - region_length)
+				break;
+			++regions;
+			if ((region_info.protection & required) != required ||
+			    (region_info.max_protection & required) != required) {
+				first_non_rx = cursor;
+				bad_current = region_info.protection;
+				bad_maximum = region_info.max_protection;
+				break;
+			}
+			const auto next = static_cast<std::uintptr_t>(region) +
+				region_length;
+			if (next <= cursor)
+				break;
+			cursor = std::min(source_limit, next);
+		}
+		fprintf(stderr,
+			"UML ELF: RX source-range audit length=%zu "
+			"scanned=%zu regions=%u complete=%d "
+			"first_non_rx=%#lx bad_cur=%#x bad_max=%#x\\n",
+			length, static_cast<size_t>(cursor - source_start),
+			regions, range_ok && cursor == source_limit ? 1 : 0,
+			static_cast<unsigned long>(first_non_rx),
+			static_cast<unsigned int>(bad_current),
+			static_cast<unsigned int>(bad_maximum));
 		set_elf_error(
 			"UML ELF: signed RX remap failed source=%#lx dest=%#lx "
 			"(kr=%d target=%#lx cur=%#x max=%#x "
