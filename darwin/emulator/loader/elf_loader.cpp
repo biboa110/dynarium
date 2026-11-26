@@ -339,10 +339,16 @@ private:
 			static_cast<unsigned long>(first_non_rx),
 			static_cast<unsigned int>(bad_current),
 			static_cast<unsigned int>(bad_maximum));
+		/* Serial Console displays the stored ELF error, not the
+		 * preceding stderr lines. Embed the full source-range audit in
+		 * that error so it reaches the user-facing iOS dialog/console. */
 		set_elf_error(
-			"UML ELF: signed RX remap failed source=%#lx dest=%#lx "
-			"(kr=%d target=%#lx cur=%#x max=%#x "
-			"source_kr=%d source_cur=%#x source_max=%#x): %s",
+			"UML ELF: signed RX remap failed [rx-audit-v2] "
+			"source=%#lx dest=%#lx kr=%d target=%#lx "
+			"cur=%#x max=%#x source_kr=%d source_cur=%#x "
+			"source_max=%#x audit_len=%zu scanned=%zu regions=%u "
+			"complete=%d first_non_rx=%#lx bad_cur=%#x "
+			"bad_max=%#x: %s",
 			static_cast<unsigned long>(reinterpret_cast<uintptr_t>(source)),
 			static_cast<unsigned long>(destination),
 			static_cast<int>(result),
@@ -354,6 +360,11 @@ private:
 				source_info.protection : VM_PROT_NONE),
 			static_cast<unsigned int>(source_result == KERN_SUCCESS ?
 				source_info.max_protection : VM_PROT_NONE),
+			length, static_cast<size_t>(cursor - source_start),
+			regions, range_ok && cursor == source_limit ? 1 : 0,
+			static_cast<unsigned long>(first_non_rx),
+			static_cast<unsigned int>(bad_current),
+			static_cast<unsigned int>(bad_maximum),
 			mach_error_string(result));
 		return -1;
 	}
