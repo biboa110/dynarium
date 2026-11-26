@@ -113,11 +113,14 @@ workflows:
               build
             VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//' | tr -d ' \r\n')
             test -n "$VERSION"
+            COMMIT=$(git rev-parse --short=8 HEAD)
+            IPA="artifacts/Dynarium-v$VERSION-ios16-rxprobe-$COMMIT.ipa"
             ./Dynarium/scripts/package-ipa.sh \
               --app .build/xcode-ios16/Build/Products/Release-iphoneos/Dynarium.app \
-              --output "artifacts/Dynarium-v$VERSION.ipa" \
+              --output "$IPA" \
               --expected-minos 16.0
-            test -s "artifacts/Dynarium-v$VERSION.ipa"
+            test -s "$IPA"
+            echo "IPA built from $COMMIT: $IPA"
           ) 2>&1 | tee artifacts/logs/xcodebuild.log
 
     artifacts:
