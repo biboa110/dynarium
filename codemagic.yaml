@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Manual Codemagic build for the experimental iOS 16 ELF126 loader branch.
+# Select branch fix/ios16-elf126-cow-remap in Codemagic to build this revision.
+workflows:
+  dynarium-ios16:
+    name: Dynarium iOS 16 - unsigned TrollStore IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      xcode: 26.2
+      vars:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+    scripts:
+      - name: Check Apple Silicon host and install build tools
+        script: |
+          set -euo pipefail
+          uname -a
+          xcodebuild -version
+          test "$(uname -m)" = "arm64"
+          brew install cmake ninja xcodegen ldid
+          cmake --version
+          ninja --version
+          xcodegen --version
+
+      - name: Check source integrity
+        script: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, subprocess, sys
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          extensions = {".sh", ".py", ".tsv", ".cmake", ".yml", ".yaml", ".json", ".swift", ".h", ".plist", ".xcconfig"}
+          special = {"CMakeLists.txt", "CMakePresets.json", ".gitattributes", ".gitignore"}
+          bad = []
+          for name in tracked:
+              if name.startswith("dependencies/patches/"):
+                  continue
+              file = pathlib.Path(name)
+              if file.suffix in extensions or file.name in special:
+                  data = file.read_bytes()
+                  if b"\r" in data or data.startswith(b"\xef\xbb\xbf"):
+                      bad.append(name)
+          if bad:
+              sys.exit("Files have CRLF/BOM: " + ", ".join(bad))
+          print("Line endings verified")
+          PY
+          cmake -DSOURCE_ROOT="$PWD" -P scripts/audit-source-tree.cmake
+          python3 -B tests/tooling/cmake/check_license_headers.py --source-root "$PWD"
+
+      - name: Restore upstream iOS 16 dependency bundle
+        script: |
+          set -euo pipefail
+          mkdir -p .build
+          curl -fL --retry 3 --retry-all-errors \
+            -o .build/dynarium-deps-ios16-arm64.tar.gz \
+            https://github.com/userlethekhoi/dynarium/releases/download/deps-ios16-latest/dynarium-deps-ios16-arm64.tar.gz
+          tar -xzf .build/dynarium-deps-ios16-arm64.tar.gz -C .build
+          rm .build/dynarium-deps-ios16-arm64.tar.gz
+          ./dependencies/build-ios-zstd.sh --verify-only
+          ./dependencies/build-ios-storage.sh --verify-only
+          ./dependencies/build-ios-network.sh --platform ios --verify-only
+          ./dependencies/build-apple-gpu.sh --platform ios --verify-only
+
+      - name: Download Android 17 kernel bundle (6.18 arm64 4K)
+        script: |
+          set -euo pipefail
+          mkdir -p .build/kernel/artifacts .build/kernel/tmp
+          curl -fL --retry 3 --retry-all-errors \
+            -o .build/kernel/tmp/android-kernel.tar.gz \
+            https://github.com/imxieyi/Kernarium/releases/download/1.0b9-beta/android-6.18-arm64-4k-20261111-6.18.60-mc2.tar.gz
+          tar -xzf .build/kernel/tmp/android-kernel.tar.gz -C .build/kernel/tmp
+          bundle_dir=".build/kernel/artifacts/android-6.18-arm64-4k-20261111-6.18.60-mc2"
+          if [ -d ".build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2/kernel" ]; then
+            mv .build/kernel/tmp/android-6.18-arm64-4k-20261111-6.18.60-mc2 "$bundle_dir"
+          elif [ -d ".build/kernel/tmp/kernel" ]; then
+            mkdir -p "$bundle_dir"
+            mv .build/kernel/tmp/* "$bundle_dir/"
+          else
+            echo "Unexpected kernel archive layout" >&2
+            exit 1
+          fi
+          rm -rf .build/kernel/tmp
+          test -f "$bundle_dir/kernel/vmlinux"
+
+      - name: Compile iOS 16 runtime and package XCFrameworks
+        script: |
+          set -euo pipefail
+          mkdir -p artifacts/logs
+          (
+            set -e
+            cmake --preset kernarium-ios-device-android
+            cmake --build --preset kernarium-ios-device-android
+            ./Dynarium/scripts/package-dynarium-frameworks.sh --tier ios16-universal
+          ) 2>&1 | tee artifacts/logs/runtime.log
+
+      - name: Build Dynarium iOS 16 and package unsigned IPA
+        script: |
+          set -euo pipefail
+          mkdir -p artifacts/logs
+          (
+            set -e
+            (cd Dynarium && xcodegen generate)
+            xcodebuild \
+              -project Dynarium/Dynarium.xcodeproj \
+              -scheme Dynarium \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -derivedDataPath .build/xcode-ios16 \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+              build
+            VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//' | tr -d ' \r\n')
+            test -n "$VERSION"
+            ./Dynarium/scripts/package-ipa.sh \
+              --app .build/xcode-ios16/Build/Products/Release-iphoneos/Dynarium.app \
+              --output "artifacts/Dynarium-v$VERSION.ipa" \
+              --expected-minos 16.0
+            test -s "artifacts/Dynarium-v$VERSION.ipa"
+          ) 2>&1 | tee artifacts/logs/xcodebuild.log
+
+    artifacts:
+      - artifacts/*.ipa
+      - artifacts/logs/*.log
