@@ -236,6 +236,72 @@ private:
  * the failed fixed-overwrite RX mapping. This establishes whether iOS strips
  * executable permissions from all aliases or just the requested target.
  * Both scratch mappings are released before the ELF loader returns. */
+/* vm_remap's returned protection parameters can be more restrictive than
+ * the resulting VM entry on iOS 16. Never decide executability from those
+ * output parameters alone: verify the ACTUAL mapping, including every
+ * region in the target interval, before allowing the guest to enter it.
+ * This is read-only inspection and does not request writable code pages. */
+struct ActualRxAudit final {
+	bool complete{};
+	bool all_rx{};
+	std::size_t scanned{};
+	unsigned regions{};
+	vm_prot_t first_current{VM_PROT_NONE};
+	vm_prot_t first_maximum{VM_PROT_NONE};
+	std::uintptr_t first_bad{};
+	vm_prot_t bad_current{VM_PROT_NONE};
+	vm_prot_t bad_maximum{VM_PROT_NONE};
+};
+
+[[nodiscard]] ActualRxAudit audit_actual_rx_range(
+	std::uintptr_t begin, std::size_t length) noexcept
+{
+	ActualRxAudit audit;
+	if (length == 0 || begin > UINTPTR_MAX - length)
+		return audit;
+	const auto end = begin + length;
+	std::uintptr_t cursor = begin;
+	constexpr vm_prot_t required = VM_PROT_READ | VM_PROT_EXECUTE;
+	for (; cursor < end && audit.regions < 128;) {
+		vm_address_t region = static_cast<vm_address_t>(cursor);
+		vm_size_t size = 0;
+		vm_region_basic_info_data_64_t info = {};
+		mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+		mach_port_t object = MACH_PORT_NULL;
+		const kern_return_t kr = vm_region_64(mach_task_self(),
+			&region, &size, VM_REGION_BASIC_INFO_64,
+			reinterpret_cast<vm_region_info_t>(&info), &count, &object);
+		if (object != MACH_PORT_NULL)
+			(void)mach_port_deallocate(mach_task_self(), object);
+		if (kr != KERN_SUCCESS ||
+		    static_cast<std::uintptr_t>(region) > cursor ||
+		    size == 0 ||
+		    static_cast<std::uintptr_t>(region) > UINTPTR_MAX - size)
+			break;
+		if (audit.regions == 0) {
+			audit.first_current = info.protection;
+			audit.first_maximum = info.max_protection;
+		}
+		++audit.regions;
+		if ((info.protection & required) != required ||
+		    (info.max_protection & required) != required) {
+			audit.first_bad = cursor;
+			audit.bad_current = info.protection;
+			audit.bad_maximum = info.max_protection;
+			break;
+		}
+		const auto next =
+			static_cast<std::uintptr_t>(region) + size;
+		if (next <= cursor)
+			break;
+		cursor = std::min(end, next);
+	}
+	audit.scanned = cursor - begin;
+	audit.complete = cursor == end;
+	audit.all_rx = audit.complete && audit.regions > 0;
+	return audit;
+}
+
 struct RxAnywhereProbe final {
 	kern_return_t result{KERN_INVALID_ARGUMENT};
 	vm_prot_t current{VM_PROT_NONE};
@@ -307,9 +373,26 @@ struct RxAnywhereProbe final {
 		    KERN_SUCCESS)
 			current_protection = required;
 	}
-	if (result != KERN_SUCCESS || target != destination ||
-	    (current_protection & required) != required ||
-	    (maximum_protection & required) != required) {
+	/* Inspect every page actually installed at the FIXED destination,
+	 * not merely the vm_remap out-parameters. The RX-anywhere v3 trial
+	 * proved those output values may report R/R although vm_region_64
+	 * observes RX at the created mapping. Never skip this verification. */
+	const ActualRxAudit fixed_audit =
+		result == KERN_SUCCESS && target == destination ?
+		audit_actual_rx_range(destination, length) : ActualRxAudit{};
+	if (fixed_audit.all_rx &&
+	    ((current_protection & required) != required ||
+	     (maximum_protection & required) != required))
+		fprintf(stderr,
+			"UML ELF: fixed RX region VERIFIED despite vm_remap "
+			"out-params cur=%#x max=%#x; actual=%#x/%#x "
+			"len=%zu regions=%u\n",
+			static_cast<unsigned int>(current_protection),
+			static_cast<unsigned int>(maximum_protection),
+			static_cast<unsigned int>(fixed_audit.first_current),
+			static_cast<unsigned int>(fixed_audit.first_maximum),
+			length, fixed_audit.regions);
+	if (!fixed_audit.all_rx) {
 		/* Query the signed carrier's first source page to distinguish
 		 * a read-only source segment from an iOS remap-policy rejection. */
 		vm_address_t source_region = reinterpret_cast<vm_address_t>(source);
@@ -393,8 +476,9 @@ struct RxAnywhereProbe final {
 		const RxAnywhereProbe cow =
 			probe_anywhere_rx_remap(source, length, TRUE);
 		set_elf_error(
-			"UML ELF: signed RX remap failed [rx-probe-v3] "
+			"UML ELF: fixed RX denied [rx-verify-v4] "
 			"dest=%#lx fixed=%d/%#x/%#x "
+			"actual=%#x/%#x verified=%d scan=%zu/%zu bad=%#lx/%#x/%#x "
 			"src=%#x/%#x audit=%zu/%zu regions=%u "
 			"complete=%d first_non_rx=%#lx "
 			"any_shared=%d/%#x/%#x/%#x/%#x "
@@ -403,6 +487,13 @@ struct RxAnywhereProbe final {
 			static_cast<int>(result),
 			static_cast<unsigned int>(current_protection),
 			static_cast<unsigned int>(maximum_protection),
+			static_cast<unsigned int>(fixed_audit.first_current),
+			static_cast<unsigned int>(fixed_audit.first_maximum),
+			fixed_audit.all_rx ? 1 : 0,
+			fixed_audit.scanned, length,
+			static_cast<unsigned long>(fixed_audit.first_bad),
+			static_cast<unsigned int>(fixed_audit.bad_current),
+			static_cast<unsigned int>(fixed_audit.bad_maximum),
 			static_cast<unsigned int>(source_result == KERN_SUCCESS ?
 				source_info.protection : VM_PROT_NONE),
 			static_cast<unsigned int>(source_result == KERN_SUCCESS ?
