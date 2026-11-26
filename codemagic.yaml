@@ -114,7 +114,7 @@ workflows:
             VERSION=$(grep '^MARKETING_VERSION' Dynarium/Config/Version.xcconfig | sed 's/.*=[[:space:]]*//' | tr -d ' \r\n')
             test -n "$VERSION"
             COMMIT=$(git rev-parse --short=8 HEAD)
-            IPA="artifacts/Dynarium-v$VERSION-ios16-rxprobe-$COMMIT.ipa"
+            IPA="artifacts/Dynarium-v$VERSION-ios16-rxverify-v4-$COMMIT.ipa"
             ./Dynarium/scripts/package-ipa.sh \
               --app .build/xcode-ios16/Build/Products/Release-iphoneos/Dynarium.app \
               --output "$IPA" \
